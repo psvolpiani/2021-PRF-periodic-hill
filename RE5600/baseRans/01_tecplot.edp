@@ -1,0 +1,53 @@
+// Parameters
+
+int nummesh = 1;    // Mesh index
+real Re = 5600;     // Reynolds number
+real nu = 1./Re;    // Viscosity
+real nutinf = 3.;   // Viscosity in the free-stream
+func Pku = P1b;     // Polynomial type for velocity
+func Pkp = P1;      // Polynomial type for pressure
+int ku = 2;         // degree of the polynoms (2 for P2dc ...)
+int kp = 1;         //Order of interpolation for the pressure
+int qfo = 3*ku+1;   //order of quadrature
+int inlet=1;        // Inlet index
+int outlet=3;       // Outlet index
+
+// Read mesh and create finite element space
+
+mesh th = readmesh("../mesh/mesh"+nummesh+".msh");
+fespace fuupu(th,[Pku,Pku,Pkp,Pku], periodic=[[inlet,y],[outlet,y]]);
+fespace fuup(th,[Pku,Pku,Pkp], periodic=[[inlet,y],[outlet,y]]);
+fespace fu(th,Pku, periodic=[[inlet,y],[outlet,y]]);
+int ndof = fuupu.ndof;
+int nbv = th.nv;
+int nbt = th.nt;
+
+// Declare variables and load solution
+
+fuup [ub,vb,pb];fu nutb;
+{
+  ifstream file("./results/Baseflow-Re-"+Re+"-nutinf-"+nutinf+"-mesh-"+nummesh+".txt");
+  file >> ub[];
+  file >> nutb[];
+}
+
+// Export tecplot file
+
+{
+  ofstream file("tcpSolution-Re-"+Re+"-nutinf-"+nutinf+"-mesh-"+nummesh+".dat");
+  file <<"TITLE = "<<"PHILL"<<endl;
+  file << "VARIABLES = \"X\" ,  \"Y\" , \"ub\" , \"vb\" , \"pb\" , \"nut-SA\" " << endl;
+  //file << "ZONE NODES=" << nbv << " , ELEMENTS = " << nbt << " , DATAPACKING = POINT , ZONETYPE=FETRIANGLE " << endl;
+  file << "ZONE"<<"   "<<"N="<<th.nv<<","<<"E="<<th.nt<<","<<"F=FEPOINT,ET=TRIANGLE"<<endl;
+  
+  for (int i=0; i<nbv; i++){
+    real xt = th(i).x;
+    real yt = th(i).y;
+    file << xt << " " << yt << " " << ub(xt,yt) << " " << vb(xt,yt) << " " << pb(xt,yt) << " " << nutb(xt,yt) << endl;
+  };
+  
+  // List connectivity
+  for (int k=0; k<nbt; k++){
+    file << int(th[k][0])+1 << " " << int(th[k][1])+1 << " " << int(th[k][2])+1 << endl;
+  };
+};

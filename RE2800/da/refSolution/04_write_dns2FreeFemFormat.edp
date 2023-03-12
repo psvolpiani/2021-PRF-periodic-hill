@@ -1,0 +1,131 @@
+real Re = 2800;
+int nummesh = 1;
+int inlet = 1;
+int outlet = 3;
+real nutinf = 3.;
+
+mesh th = readmesh("../../mesh/mesh"+nummesh+".msh");
+
+fespace fu(th,P1);
+
+int ii,j,NN;
+ifstream fileX("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-X.dat"); fileX >> NN;
+ifstream fileY("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-Y.dat"); fileY >> NN;
+ifstream fileU("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-U.dat"); fileU >> NN;
+ifstream fileV("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-V.dat"); fileV >> NN;
+ifstream fileUU("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-UU.dat"); fileUU >> NN;
+ifstream fileVV("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-VV.dat"); fileVV >> NN;
+ifstream fileWW("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-WW.dat"); fileWW >> NN;
+ifstream fileUV("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-UV.dat"); fileUV >> NN;
+
+cout << "number of points : " << NN << endl;
+real[int] X(NN),Y(NN),U(NN),V(NN),UU(NN),VV(NN),WW(NN),UV(NN);
+
+for(ii=0;ii<NN;ii++){
+  fileX >> X(ii);
+  fileY >> Y(ii);
+  fileU >> U(ii);
+  fileV >> V(ii);
+  fileUU >> UU(ii);
+  fileVV >> VV(ii);
+  fileWW >> WW(ii);
+  fileUV >> UV(ii);
+}
+
+cout << "Max of X  : " << X.max << endl;
+cout << "Max of Y  : " << Y.max << endl;
+cout << "Max of U  : " << U.max << endl;
+cout << "Max of V  : " << V.max << endl;
+cout << "Max of UU : " << UU.max << endl;
+cout << "Max of VV : " << VV.max << endl;
+cout << "Max of WW : " << WW.max << endl;
+cout << "Max of UV : " << UV.max << endl;
+
+real dist,distmin;
+int k;
+fu Uff,Vff,UUff,VVff,WWff,UVff;
+if( abs(th.nv - NN)>0 ){
+	cout << "Incompatibility" << endl;
+}
+else{
+	cout << "Compatibility" << endl;
+}
+for( ii=0 ; ii<th.nv ; ii++ ){
+	distmin = 1000000.;
+  cout << "ii : " << ii << endl;
+	for( j=0 ; j<NN ; j++ ){
+		dist = ( th(ii).x - X(j) )^2 + ( th(ii).y - Y(j) )^2;
+		if( dist < distmin ){
+			distmin = dist;
+			k = j;
+		}
+	}
+	Uff[][ii]    = U(k);
+	Vff[][ii]    = V(k);
+	UUff[][ii]   = UU(k);
+  VVff[][ii]   = VV(k);
+  WWff[][ii]   = WW(k);
+  UVff[][ii]   = UV(k);
+}
+
+plot(Uff);
+plot(Vff);
+plot(UUff);
+plot(VVff);
+plot(WWff);
+plot(UVff);
+
+// Compute DNS forces
+fespace fup(th, P1, periodic=[[inlet,y],[outlet,y]]);
+fup fx,fy;
+
+fx = dx(UUff)+dy(UVff);
+fy = dx(UVff)+dy(VVff);
+
+// Export tecplot file
+
+{
+  ofstream file("tcpDNS-Re-"+Re+"-nutinf-"+nutinf+"-mesh-"+nummesh+".dat");
+  file <<"TITLE = "<<"PHILL"<<endl;
+  file << "VARIABLES = \"X\" ,  \"Y\" , \"U\" , \"V\" , \"UU\" , \"VV\", \"WW\" , \"UV\" , \"FX_DNS\" , \"FY_DNS\" " << endl;
+  //file << "ZONE NODES=" << nbv << " , ELEMENTS = " << nbt << " , DATAPACKING = POINT , ZONETYPE=FETRIANGLE " << endl;
+  file << "ZONE"<<"   "<<"N="<<th.nv<<","<<"E="<<th.nt<<","<<"F=FEPOINT,ET=TRIANGLE"<<endl;
+  
+  for (int i=0; i<th.nv; i++){
+  real xt = th(i).x;
+  real yt = th(i).y;
+  file  << xt << " "
+        << yt << " "
+        << Uff(xt,yt) << " "
+        << Vff(xt,yt) << " "
+        << UUff(xt,yt) << " "
+        << VVff(xt,yt) << " "
+        << WWff(xt,yt) << " "
+        << UVff(xt,yt) << " "
+        << fx(xt,yt) << " "
+        << fy(xt,yt)
+        << endl;
+  };
+  
+  // List connectivity
+  for (int k=0; k<th.nt; k++){
+  file << int(th[k][0])+1 << " " << int(th[k][1])+1 << " " << int(th[k][2])+1 << endl;
+  };
+};
+
+// Export freefem file
+
+func Pku = P1b;
+func Pkp = P1;
+fespace f6u(th,[Pku,Pku,Pku,Pku,Pku,Pku], periodic=[[inlet,y],[outlet,y]]);
+
+f6u [ur,vr,uur,vvr,wwr,uvr] = [Uff,Vff,UUff,VVff,WWff,UVff];
+plot(ur);
+plot(vr);
+{
+  ofstream file("./Ue_Ve_UUe_VVe_WWe_UVe-mesh-"+nummesh+".txt");
+  file.precision(16);
+  file << ur[];
+}
+
+

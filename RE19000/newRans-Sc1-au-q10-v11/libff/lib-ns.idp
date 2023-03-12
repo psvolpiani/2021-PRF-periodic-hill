@@ -1,0 +1,270 @@
+// ===========================
+// RANS and its adjoint solver
+// ===========================
+
+func int NS(real[int] &flow, real[int] &flow0,  real[int] &fx,
+						real[int] &fx0,
+						real nu,
+						real dpdx,
+						real toll, int maxiter)
+{
+	cout << endl << "Navier Stokes solver: " << endl;
+	
+	// Unwrap inputs
+	UhxUhxPhxUh [ub1   ,ub2    ,pb   ,nutb   ]; ub1[]     = flow;
+	UhxUhxPhxUh [u1init,ui2init,pinit,nutinit]; u1init[]  = flow0;
+	UhxUh [ffx,ffy];                           ffx[]     = fx;
+	UhxUh [ffxinit,ffyinit];                   ffxinit[] = fx0;
+
+	// Robustness parameters
+	real CFL,CFLmin,CFLmax;
+	CFLmin = 1.;
+	CFLmax = 1.e+10;
+	Nh dt,dtau;
+
+	// Relaxation parameter to slowly introduce the new forcing
+	real beta;
+	int I; // iterations for beta
+
+	UhxUh [diffffx,diffffy];
+	diffffx[] = ffx[] - ffxinit[];
+	if(diffffx[].linfty>1.e-10){ I = 5; }
+	else {                       I = 1; }
+
+	// define NS problem
+	UhxUhxPhxUh [du1,du2,dp,dnut];
+	UhxUhxPhxUh [r1 ,r2 ,rp,rnut]; 
+
+	// For Spallart Almaras
+	real cv1   = 7.1;
+	real cv2   = 0.7;
+	real cv3   = 0.9;
+	real cb1   = 0.1355;
+	real cb2   = 0.622;
+	real sigma = 2./3.;
+	real kk    = 0.41;
+	real cw1   = 0.1355/(kk^2.) + (1.+cb2)/sigma;
+	real cw2   = 0.3;
+	real cw3   = 2.;
+
+	Nh xi,xi2,xi3,csiSA,dcsiSAdnut,csiNS,dcsiNSdnut,S,dSduv,fv1,dfv1dnu,nuT,fv2,dft2dnu,dStildeduv,dsddxnu,dsddynu,gn,dgndxi;
+	P0h S0,Sbar,dSbardnu,Stilde,dStildednu,r,rpp,drdnu,drduv,g,dgdr,fw,dfwdg,dfwdnu,dfwduv,d,d2,normu;
+	P0h su,dsdnuu,dsduvu;
+	Nh Nutinf;
+	P0h s,dsdnu,dsduv;
+
+	Nh dxub1,dyub1,dxub2,dyub2,dxnutb,dynutb;
+	Nh tempu1,tempu2;
+
+	// Matrices
+	matrix A,DDX,DDY,Mu;
+
+	// Load distance function
+	{
+		ifstream file("../mesh/distance-mesh-"+nummesh+".txt");
+		file >> d[]; d2 = d*d;
+	}
+
+	real M     = 0.00001;
+	real MSUPG = 0.1;
+
+	Uh TauSUPG,NormeT,ReT,chiT;
+	Uh dNormeTdu,dNormeTdv,dReTdu,dReTdv,dchiT,dTauSUPGdu,dTauSUPGdv;
+	P0h hT;
+	
+	// We calculate the 'mesh size'
+	hT  = sqrt(2.)*area/hTriangle;
+	
+	// Variational formulations
+	varf NS([du1,du2,dp,dnut],[v1,v2,q,mut]) = int2d(th)( 
+							  csiNS*(2*dx(du1)*dx(v1)+(dy(du1)+dx(du2))*dy(v1)+2*dy(du2)*dy(v2)+(dx(du2)+dy(du1))*dx(v2))             // Diffusive terms in NS
+							+ dcsiNSdnut*dnut*(2*dx(ub1)*dx(v1)+(dy(ub1)+dx(ub2))*dy(v1)+2*dy(ub2)*dy(v2)+(dx(ub2)+dy(ub1))*dx(v2))   // Diffusive terms in NS
+							+ v1*(du1*dx(ub1)+du2*dy(ub1)+ub1*dx(du1)+ub2*dy(du1))                                                    // Convective terms in NS
+							+ v2*(du1*dx(ub2)+du2*dy(ub2)+ub1*dx(du2)+ub2*dy(du2))                                                    // Convective terms in NS
+							- dp*(dx(v1)+dy(v2))                                                                                      // Pressure
+							- q*(dx(du1)+dy(du2))                                                                                     // Div(u)
+							+ (1./sigma)*csiSA*(dx(dnut)*dx(mut) + dy(dnut)*dy(mut))                                                  // Diffusive terms in SA
+							+ (1./sigma)*dcsiSAdnut*dnut*(dx(nutb)*dx(mut) + dy(nutb)*dy(mut))                                        // Diffusive terms in SA
+							+ (ub1*dx(dnut) + ub2*dy(dnut) + du1*dx(nutb) + du2*dy(nutb))*mut                                         // Convective terms in SA
+							- dsdnu*dnut*mut                                                                                          // Forcing term SA
+							- (dsddxnu*dx(dnut) + dsddynu*dy(dnut))*mut                                                               // Forcing term SA
+							- dsduv*(dy(du1) - dx(du2))*mut                                                                           // Forcing term SA
+							// Stabilisation
+ 							+ TauSUPG*                          ( du1 *dx(v1) + du2 *dy(v1) )*( ub1*dx(ub1)  + ub2*dy(ub1) )  
+ 							+ TauSUPG*                          ( du1 *dx(v2) + du2 *dy(v2) )*( ub1*dx(ub2)  + ub2*dy(ub2) )
+							+ TauSUPG*                          ( du1 *dx(mut)+ du2 *dy(mut))*( ub1*dx(nutb) + ub2*dy(nutb))  
+ 							+ TauSUPG*                          ( ub1*dx(v1)  + ub2*dy(v1)  )*( du1 *dx(ub1) + du2 *dy(ub1) + ub1*dx(du1)  + ub2*dy(du1) )  
+ 							+ TauSUPG*                          ( ub1*dx(v2)  + ub2*dy(v2)  )*( du1 *dx(ub2) + du2 *dy(ub2) + ub1*dx(du2)  + ub2*dy(du2) ) 
+							+ TauSUPG*                          ( ub1 *dx(mut)+ ub2 *dy(mut))*( du1*dx(nutb) + du2*dy(nutb) + ub1*dx(dnut) + ub2*dy(dnut))  
+ 							+ (dTauSUPGdu*du1 + dTauSUPGdv*du2)*( ub1*dx(v1)  + ub2*dy(v1)  )*( ub1*dx(ub1)  + ub2*dy(ub1) )  
+ 							+ (dTauSUPGdu*du1 + dTauSUPGdv*du2)*( ub1*dx(v2)  + ub2*dy(v2)  )*( ub1*dx(ub2)  + ub2*dy(ub2) )
+							+ (dTauSUPGdu*du1 + dTauSUPGdv*du2)*( ub1*dx(mut) + ub2*dy(mut) )*( ub1*dx(nutb) + ub2*dy(nutb))  
+							)
+							+ on(2,du1=0.0,du2=0.0,dnut=0.0);
+
+	varf NSrhs([du1,du2,dp,dnut],[v1,v2,q,mut])=			
+		-int2d(th)( 				+ csiNS*(2*dx(ub1)*dx(v1)+(dy(ub1)+dx(ub2))*dy(v1)+2*dy(ub2)*dy(v2)+(dx(ub2)+dy(ub1))*dx(v2))
+							+ v1*(ub1*dx(ub1)+ub2*dy(ub1)) + v2*(ub1*dx(ub2)+ub2*dy(ub2))
+							- pb*(dx(v1)+dy(v2)) - q*(dx(ub1)+dy(ub2))
+							+ (1./sigma)*csiSA*(dx(nutb)*dx(mut) + dy(nutb)*dy(mut))
+							+ (ub1*dx(nutb) + ub2*dy(nutb))*mut
+							- s*mut
+							- beta*(ffx*v1 + ffy*v2) - (1.-beta)*(ffxinit*v1+ffyinit*v2) + dpdx * v1
+							// Stabilisation
+							+ TauSUPG*(ub1*dx(v1) +ub2*dy(v1) )*(ub1*dx(ub1) +ub2*dy(ub1) )  
+							+ TauSUPG*(ub1*dx(v2) +ub2*dy(v2) )*(ub1*dx(ub2) +ub2*dy(ub2) ) 
+							+ TauSUPG*(ub1*dx(mut)+ub2*dy(mut))*(ub1*dx(nutb)+ub2*dy(nutb))  
+							)
+							+ on(2,du1=0.0,du2=0.0,dnut=0.0);
+	
+	varf mass(phi,phih) = int2d(th)( phi*phih );	
+	varf DX(phi,phih)   = int2d(th)( dx(phi)*phih );		
+	varf DY(phi,phih)   = int2d(th)( dy(phi)*phih );			
+
+	DDX = DX(Nh,Nh);					
+	DDY = DY(Nh,Nh);					
+	Mu  = mass(Nh,Nh);					
+	set(Mu,solver=sparsesolver);
+
+	// Newton method
+	real res,dun;
+	int  iter;
+
+	// Flag for convergence
+	int maxitereffective = maxiter;
+	
+	while(maxitereffective<400){
+		for(iter=1;iter<maxitereffective+1;iter++){
+			// - compute the relaxation parameter in function of iter
+			beta = (iter<=I)*( 1.*(0.5*sin(pi*iter/I-pi/2.) + .5) ) + (iter>I)*1.;
+			cout << "Parameter beta at iteration " << iter << " : " << beta << endl;
+
+			// Stabilization
+			NormeT     = sqrt( ub1*ub1+ub2*ub2 + MSUPG^2);
+			ReT        = 0.5*NormeT*hT*Re;
+			chiT       = (ReT<=3)*(ReT/3.) + (ReT>3)*(1.);
+			TauSUPG    = chiT*hT/(2.*NormeT);
+			dNormeTdu  = ub1/sqrt( ub1*ub1+ub2*ub2 + MSUPG^2);
+			dNormeTdv  = ub2/sqrt( ub1*ub1+ub2*ub2 + MSUPG^2);
+			dReTdu     = 0.5*hT*dNormeTdu*Re;
+			dReTdv     = 0.5*hT*dNormeTdv*Re;
+			dchiT      = (1./3.)*(ReT<3.);
+			dTauSUPGdu = (hT/2.)*( - (chiT/(NormeT^2))*dNormeTdu + dchiT*dReTdu/NormeT );
+			dTauSUPGdv = (hT/2.)*( - (chiT/(NormeT^2))*dNormeTdv + dchiT*dReTdv/NormeT );
+
+			// Computation of derivatives of (ub,vb) and nutb
+			{
+				tempu1 = ub1;    tempu2[] = DDX*tempu1[]; dxub1[]  = Mu^-1*tempu2[];
+				tempu1 = ub1;    tempu2[] = DDY*tempu1[]; dyub1[]  = Mu^-1*tempu2[];
+				tempu1 = ub2;    tempu2[] = DDX*tempu1[]; dxub2[]  = Mu^-1*tempu2[];
+				tempu1 = ub2;    tempu2[] = DDY*tempu1[]; dyub2[]  = Mu^-1*tempu2[];
+				tempu1 = nutb;   tempu2[] = DDX*tempu1[]; dxnutb[] = Mu^-1*tempu2[];
+				tempu1 = nutb;   tempu2[] = DDY*tempu1[]; dynutb[] = Mu^-1*tempu2[];
+			}	
+
+			// Computation of SA functions	
+			xi = nutb/nu;
+			xi2 = xi*(nutb/nu);
+			xi3 = xi2*(nutb/nu);
+			csiSA = (xi>=0.)*nu*(1.+xi) + (xi<0.)*nu*(1.+xi+0.5*xi2);
+			dcsiSAdnut = (xi>=0.)*1. + (xi<0.)*(1.+xi);
+			fv1 = (xi3)/(xi3 + cv1^3);
+			dfv1dnu = (3./nu)*(cv1^3)*(xi2)/((xi3+cv1^3)^2);
+			nuT = nutb*fv1;
+			csiNS = nu + (nuT>=0.)*nuT;
+			dcsiNSdnut = (nuT>=0.)*(fv1 + nutb*dfv1dnu);
+			S = sqrt((dyub1 - dxub2)^2 + M^2 ) - M;
+			S0 = S;
+			dSduv = (dyub1 - dxub2)/sqrt( (dyub1 - dxub2)^2 + M^2 );
+			fv2 = 1. - xi/( 1. + xi*fv1 );
+			Sbar = nutb*fv2/(kk*kk*d2);
+			dSbardnu = (1./(kk*kk*d2))*( fv2 + xi*(nu*xi2*dfv1dnu - 1.)/((1.+xi*fv1)^2) );
+			Stilde = Sbar + S0;
+			dStildednu = dSbardnu;
+			dStildeduv = dSduv;
+			rpp = nutb/(Stilde*kk*kk*d2);
+			r = 0. + (rpp<0. || rpp>10.)*(10.) + (rpp>=0. && rpp<=10.)*rpp;
+			drdnu = (rpp>=0. && rpp<=10.)*r*(1./nutb - dStildednu/Stilde);
+			drduv = (rpp>=0. && rpp<=10.)*( - r*dStildeduv/Stilde );
+			g = r + cw2*(r^6-r);
+			dgdr = 1. + cw2*(6.*r^5-1.);
+		
+			fw = g*(( 1. + cw3^6 )/( g^6 + cw3^6 ) )^(1./6.);
+			dfwdg = (((1.+cw3^6)/(g^6+cw3^6))^(1./6.))*( 1. - (g^6)/(g^6+cw3^6) );
+			dfwdnu = dfwdg*dgdr*drdnu;
+			dfwduv = dfwdg*dgdr*drduv; 
+		
+			gn = 1. - 1000.*xi2/( 1. + xi2 );
+			dgndxi = - 2000.*xi/( ( 1. + xi2 )^2 );
+
+			su =      (xi>=0.)*( cb1*Stilde*nutb - cw1*fw*(nutb^2)/d2 + (cb2/sigma)*(dxnutb^2 + dynutb^2) ) 
+			+ (xi<0. )*( cb1*S*nutb*gn   + cw1*   (nutb^2)/d2 + (cb2/sigma)*(dxnutb^2 + dynutb^2) );
+			s = su;
+
+			dsdnuu =  (xi>=0.)*( cb1*(dStildednu*nutb + Stilde) -    cw1*( dfwdg*dgdr*drdnu*nutb*nutb/d2 + 2.*fw*nutb/d2 ) ) 
+			+ (xi<0. )*( cb1*S*(gn + xi*dgndxi)         + 2.*cw1*nutb/d2 );
+			dsdnu = dsdnuu;
+
+			dsduvu = (xi>=0.)*( cb1*nutb*dStildeduv - cw1*nutb*nutb*dfwdg*dgdr*drduv/d2 ) + (xi<0.)*cb1*nutb*gn*dSduv;
+			dsduv = dsduvu;
+
+			dsddxnu = 2.*cb2*dxnutb/sigma;
+			dsddynu = 2.*cb2*dynutb/sigma;
+
+			// - compute residue (and store the previous one) 
+			r1[] = NSrhs(0,UhxUhxPhxUh,tgv=1.e+30);
+			res  = r1[].l2;
+
+			// build matrix and rhs
+			{
+				cout << "  -- build matrix" << endl;
+				A=NS(UhxUhxPhxUh,UhxUhxPhxUh,tgv=1.e+30);
+				set(A,solver=sparsesolver);
+			}
+			
+			// - solve for increment
+			du1[] = A^-1*r1[];
+			dun   = sqrt(int2d(th)( du1^2 + du2^2 ));
+
+			// - update solution
+			ub1[] += du1[];
+
+			plot(ub1,value=1,wait=waitplt,cmm="ub1 inside Newton algo.");
+			plot(ub2,value=1,wait=waitplt,cmm="ub2 inside Newton algo.");
+			plot(pb,value=1,wait=waitplt,cmm="pb inside Newton algo.");
+			plot(nutb,value=1,wait=waitplt,cmm="nut inside Newton algo.");
+
+			// - finalise iteration
+			cout << "  iter " << iter << ": " << res << " (" << dun << ")" << endl;
+      
+      real Ub = int1d(th,outlet)([ub1,ub2]'*[N.x,N.y])/(2.035);
+      cout << " Bulk velocity = " << Ub << endl;
+      
+			// - exit conditions
+			// -- converged:
+			if((res < toll) & (iter>=I)){
+				cout << "  Newton converged in "+iter+" iterations" << endl;
+				flow = ub1[]; 
+				return iter;
+			}
+
+			// -- diverged:
+			if((res >= 1.) & (iter>1)){
+				cout << "  Newton diverged" << endl;
+				iter = maxitereffective + 1;
+			}
+		}
+
+		ub1[]             = u1init[];
+		maxitereffective *= 2;
+		I                *= 2;	
+	}
+
+	// Not converged:
+	cout << "  Newton did not converge" << endl;
+	if(res>=1.) return -iter;
+	else{
+		//flow = ub1[]; 
+		return 0;
+	}
+}

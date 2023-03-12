@@ -1,0 +1,208 @@
+int nummesh = 2;  // Refined in Y
+
+// Geometrical parameters
+real h  = 1.;    // height of the step
+real H  = 3.035; // width of the domain
+real a  = 1.0;   // scaling factor alpha
+
+real a1 = ( 9.0/28.0) * h * a;
+real a2 = (14.0/28.0) * h * a;
+real a3 = (20.0/28.0) * h * a;
+real a4 = (30.0/28.0) * h * a;
+real a5 = (40.0/28.0) * h * a;
+real a6 = (54.0/28.0) * h * a;
+
+real l  = (144./28.0) * h; // lenght of plateau region
+real L  = l + 2.0*a6;      // total length of domain
+
+real b1 = L - a6;
+real b2 = L - a5;
+real b3 = L - a4;
+real b4 = L - a3;
+real b5 = L - a2;
+real b6 = L - a1;
+
+// reffinement parameters
+real deltax  = 0.050;  // constant
+real deltay1 = 0.005;  // at the lower wall
+real deltay2 = 0.0025; // at the upper wall
+real deltay3 = deltax; // at the centerline
+
+// Local reffinement parameters for lower domain
+real Ky1,cy1,dty1;
+Ky1  = deltay1*( (H/2.0) - deltay3 )/( deltay3 - deltay1 );
+cy1  = log( 1. + (H/2.0)/Ky1 );
+dty1 = (1./cy1)*log( 1. + deltay1/Ky1 );
+
+// Local reffinement parameters for upper domain
+real Ky2,cy2,dty2;
+Ky2  = deltay2*( (H/2.0) - deltay3 )/( deltay3 - deltay2 );
+cy2  = log( 1. + (H/2.0)/Ky2 );
+dty2 = (1./cy2)*log( 1. + deltay2/Ky2 );
+
+int[int] lableft1  = [2,10,10,1];
+int[int] labinter  = [2,10,10,10];
+int[int] labright1 = [2,10,10,3];
+
+// -----------------------------------------
+// Bottom part
+// First half
+mesh th1b  = square(    a1 /deltax,1./dty1,[       a1 *x,Ky1*(exp(cy1*y)-1.)],label=lableft1 ,flags=2);
+mesh th2b  = square((a2-a1)/deltax,1./dty1,[a1+(a2-a1)*x,Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=2);
+mesh th3b  = square((a3-a2)/deltax,1./dty1,[a2+(a3-a2)*x,Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=2);
+mesh th4b  = square((a4-a3)/deltax,1./dty1,[a3+(a4-a3)*x,Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=2);
+mesh th5b  = square((a5-a4)/deltax,1./dty1,[a4+(a5-a4)*x,Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=2);
+mesh th6b  = square((a6-a5)/deltax,1./dty1,[a5+(a6-a5)*x,Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=2);
+// Middle
+mesh th7b  = square((b1-a6)/deltax,1./dty1,[a6+(b1-a6)*x,Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=2);
+// Second half
+mesh th8b  = square(    a1 /deltax,1./dty1,[       a1 *x,Ky1*(exp(cy1*y)-1.)],label=labright1,flags=0);
+mesh th9b  = square((a2-a1)/deltax,1./dty1,[a1+(a2-a1)*x,Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=0);
+mesh th10b = square((a3-a2)/deltax,1./dty1,[a2+(a3-a2)*x,Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=0);
+mesh th11b = square((a4-a3)/deltax,1./dty1,[a3+(a4-a3)*x,Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=0);
+mesh th12b = square((a5-a4)/deltax,1./dty1,[a4+(a5-a4)*x,Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=0);
+mesh th13b = square((a6-a5)/deltax,1./dty1,[a5+(a6-a5)*x,Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=0);
+
+// -----------------------------------------
+// Top part
+// First half
+mesh th1t  = square(    a1 /deltax,1./dty2,[       a1 *x,H-Ky1*(exp(cy1*y)-1.)],label=lableft1 ,flags=0);
+mesh th2t  = square((a2-a1)/deltax,1./dty2,[a1+(a2-a1)*x,H-Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=0);
+mesh th3t  = square((a3-a2)/deltax,1./dty2,[a2+(a3-a2)*x,H-Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=0);
+mesh th4t  = square((a4-a3)/deltax,1./dty2,[a3+(a4-a3)*x,H-Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=0);
+mesh th5t  = square((a5-a4)/deltax,1./dty2,[a4+(a5-a4)*x,H-Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=0);
+mesh th6t  = square((a6-a5)/deltax,1./dty2,[a5+(a6-a5)*x,H-Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=0);
+// Middle
+mesh th7t  = square((b1-a6)/deltax,1./dty2,[a6+(b1-a6)*x,H-Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=0);
+// Second half
+mesh th8t  = square(    a1 /deltax,1./dty2,[       a1 *x,H-Ky1*(exp(cy1*y)-1.)],label=labright1,flags=2);
+mesh th9t  = square((a2-a1)/deltax,1./dty2,[a1+(a2-a1)*x,H-Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=2);
+mesh th10t = square((a3-a2)/deltax,1./dty2,[a2+(a3-a2)*x,H-Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=2);
+mesh th11t = square((a4-a3)/deltax,1./dty2,[a3+(a4-a3)*x,H-Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=2);
+mesh th12t = square((a5-a4)/deltax,1./dty2,[a4+(a5-a4)*x,H-Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=2);
+mesh th13t = square((a6-a5)/deltax,1./dty2,[a5+(a6-a5)*x,H-Ky1*(exp(cy1*y)-1.)],label=labinter ,flags=2);
+
+// -----------------------------------------
+// Meshes per stripes
+// left part
+mesh th1 = th1b + th1t;
+th1 = movemesh(th1,[x , H + (1.-y/H) * ( - H + h * (min( 28., 2.800000000000E+01 + 0.000000000000E+00*(x*28./a) + 6.775070969851E-03*(x*28./a)^2 - 2.124527775800E-03*(x*28./a)^3 ))/28. )]);
+//plot(th1);
+
+mesh th2 = th2b + th2t;
+th2 = movemesh(th2,[x , H + (1.-y/H) * ( - H + h * (2.507355893131E+01 + 9.754803562315E-01*(x*28./a) - 1.016116352781E-01*(x*28./a)^2 + 1.889794677828E-03*(x*28./a)^3)/28. )]);
+//plot(th2);
+
+mesh th3 = th3b + th3t;
+th3 = movemesh(th3,[x , H + (1.-y/H) * ( - H + h * (2.579601052357E+01 + 8.206693007457E-01*(x*28./a) - 9.055370274339E-02*(x*28./a)^2 + 1.626510569859E-03*(x*28./a)^3)/28. )]);
+//plot(th3);
+
+mesh th4 = th4b + th4t;
+th4 = movemesh(th4,[x , H + (1.-y/H) * ( - H + h * (4.046435022819E+01 - 1.379581654948E+00*(x*28./a) + 1.945884504128E-02*(x*28./a)^2 - 2.070318932190E-04*(x*28./a)^3)/28. )]);
+//plot(th4);
+
+mesh th5 = th5b + th5t;
+th5 = movemesh(th5,[x , H + (1.-y/H) * ( - H + h * (1.792461334664E+01 + 8.743920332081E-01*(x*28./a) - 5.567361123058E-02*(x*28./a)^2 + 6.277731764683E-04*(x*28./a)^3)/28. )]);
+//plot(th5);
+
+mesh th6 = th6b + th6t;
+th6 = movemesh(th6,[x , H + (1.-y/H) * ( - H + h * (max(0., 5.639011190988E+01 - 2.010520359035E+00*(x*28./a) + 1.644919857549E-02*(x*28./a)^2 + 2.674976141766E-05*(x*28./a)^3))/28. )]);
+//plot(th6);
+
+// Middle part
+mesh th7 = th7b + th7t;
+
+// right part
+mesh th8 = th8b + th8t;
+th8 = movemesh(th8,[x , H + (1.-y/H) * ( - H + h * (min( 28., 2.800000000000E+01 + 0.000000000000E+00*(x*28./a) + 6.775070969851E-03*(x*28./a)^2 - 2.124527775800E-03*(x*28./a)^3 ))/28. )]);
+//plot(th8);
+
+mesh th9 = th9b + th9t;
+th9 = movemesh(th9,[x , H + (1.-y/H) * ( - H + h * (2.507355893131E+01 + 9.754803562315E-01*(x*28./a) - 1.016116352781E-01*(x*28./a)^2 + 1.889794677828E-03*(x*28./a)^3)/28. )]);
+//plot(th9);
+
+mesh th10 = th10b + th10t;
+th10= movemesh(th10,[x, H + (1.-y/H) * ( - H + h * (2.579601052357E+01 + 8.206693007457E-01*(x*28./a) - 9.055370274339E-02*(x*28./a)^2 + 1.626510569859E-03*(x*28./a)^3)/28. )]);
+//plot(th10);
+
+mesh th11 = th11b + th11t;
+th11= movemesh(th11,[x, H + (1.-y/H) * ( - H + h * (4.046435022819E+01 - 1.379581654948E+00*(x*28./a) + 1.945884504128E-02*(x*28./a)^2 - 2.070318932190E-04*(x*28./a)^3)/28. )]);
+//plot(th11);
+
+mesh th12 = th12b + th12t;
+th12= movemesh(th12,[x, H + (1.-y/H) * ( - H + h * (1.792461334664E+01 + 8.743920332081E-01*(x*28./a) - 5.567361123058E-02*(x*28./a)^2 + 6.277731764683E-04*(x*28./a)^3)/28. )]);
+//plot(th12);
+
+mesh th13 = th13b + th13t;
+th13= movemesh(th13,[x, H + (1.-y/H) * ( - H + h * (max(0., 5.639011190988E+01 - 2.010520359035E+00*(x*28./a) + 1.644919857549E-02*(x*28./a)^2 + 2.674976141766E-05*(x*28./a)^3))/28. )]);
+//plot(th13);
+
+mesh thl = th1 + th2 + th3  + th4  + th5  + th6;
+mesh thr = th8 + th9 + th10 + th11 + th12 + th13;
+
+plot(thl);
+plot(th7);
+
+thr = movemesh(thr,[L-x,y]);
+
+plot(thr);
+
+mesh th = thl + thr + th7;
+
+plot(th);
+
+cout << "This mesh contains " << th.nt << " triangles and " << th.nv << " vertices " << endl;
+
+savemesh(th,"mesh"+nummesh+".msh");
+
+{
+  load "MUMPS_seq"
+  load "distance"
+  fespace fu1(th,P1);
+  fespace f0(th,P0);
+  fu1 lset,rhslset,dist;
+  f0 d,d2;
+  varf Lap(u,v) = int2d(th)( dx(u)*dx(v) + dy(u)*dy(v) ) + on(1,u=1.) + on(3,u=1.) + on(2,u=0.) ;
+  matrix KK = Lap(fu1,fu1,solver=sparsesolver,tgv=-1);
+  rhslset[] = Lap(0,fu1,tgv=-1);
+  lset[] = KK^-1*rhslset[];
+  plot(lset);
+  
+  dist = lset;
+  distance(th,lset,dist[]);
+  plot(dist);
+  
+  d  = dist;
+  d2 = d*d;
+  {
+    ofstream file("distance-mesh-"+nummesh+".txt");
+    file.precision(16);
+    file << d[];
+  }
+}
+
+// Export tecplot file
+
+int nbv = th.nv;
+int nbt = th.nt;
+
+{
+  ofstream file("tcp-phill-mesh-"+nummesh+".dat");
+  file <<"TITLE = "<<"PHILL"<<endl;
+  file << "VARIABLES = \"X\" ,  \"Y\"  " << endl;
+  //file << "ZONE NODES=" << nbv << " , ELEMENTS = " << nbt << " , DATAPACKING = POINT , ZONETYPE=FETRIANGLE " << endl;
+  file << "ZONE"<<"   "<<"N="<<th.nv<<","<<"E="<<th.nt<<","<<"F=FEPOINT,ET=TRIANGLE"<<endl;
+  
+  for (int i=0; i<nbv; i++){
+  real xt = th(i).x;
+  real yt = th(i).y;
+  file  << xt << " "
+        << yt
+        << endl;
+  };
+  
+  // List connectivity
+  for (int k=0; k<nbt; k++){
+  file << int(th[k][0])+1 << " " << int(th[k][1])+1 << " " << int(th[k][2])+1 << endl;
+  };
+};

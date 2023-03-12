@@ -1,0 +1,28 @@
+//////////////////////////////////////////////////////////////////////////////80
+//                                                                            //
+// Gradient toolbox                                                           //
+//                                                                            //
+// Contents: - dJdnut = getdJdnut(flow[],adj[])                               //
+//                                                                            //
+// Meshes th, thr and space UhxUhxPh, UrxUrxPr must be defined globally.      //
+//                                                                            //
+////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+////////////////////////////////////////////////////////////////////////////////
+func real[int] getdJdfx(real[int] &flow, real[int] &adj, real[int] &control){
+	// Unwrap direct and adjoint solutions
+	UhxUhxPhxUh [u ,v ,p ,nut];    u[]  = flow;
+	UhxUhxPhxUh [ua,va,pa,nuta];  ua[]  = adj;
+	UhxUh [ffx,ffy];              ffx[] = control;
+	UhxUh [dJx,dJy];   
+	
+	[dJx,dJy] = [ - ua, - va];
+	
+	// Output
+	return dJx[];
+}

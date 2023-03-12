@@ -1,0 +1,167 @@
+include "getARGV.idp"
+load "MUMPS"
+load "bfstream"
+
+// physical parameters
+real Re      = 2800;  // Reynolds number
+real nu      = 1./Re; // molecular viscosity
+real nutinf  = 3.;
+
+// numerical parameters
+int NSmaxiter  = 20;    // maximum number of iteration for NS solver
+int NSiter;             // number of Newton iteration for NS solver
+real NStoll    = 1.e-8; // tollerance for NS solver
+bool waitplt   = false; // flag to wait after plot
+int ite        = 0;     // optim. iteration
+
+// mesh and FEM spaces
+int nummesh = 1;
+int inlet = 1;
+int outlet = 3;
+mesh th = readmesh("../../mesh/mesh"+nummesh+".msh");
+
+// define spaces
+func Pku = P1b;
+func Pkp = P1;
+fespace UhxUhxPhxUh(th,[Pku,Pku,Pkp,Pku], periodic=[[inlet,y],[outlet,y]]); // RANS flow
+fespace UhxUhxPh(th,[Pku,Pku,Pkp], periodic=[[inlet,y],[outlet,y]]);        // (u,v,p) flow
+fespace UhxUh(th,[Pku,Pku], periodic=[[inlet,y],[outlet,y]]);               // (fx,fy) flow
+fespace Uh(th,Pku, periodic=[[inlet,y],[outlet,y]]);                        // velocity component
+fespace Ph(th,Pkp, periodic=[[inlet,y],[outlet,y]]);                        // pressure
+fespace Nh(th,Pku, periodic=[[inlet,y],[outlet,y]]);                        // turbulent viscosity
+fespace P0h(th,P0, periodic=[[inlet,y],[outlet,y]]);                        // P0 FEM space
+
+// Read reference solution (DNS)
+UhxUhxPhxUh [ur,vr,pr,nutr];
+UhxUhxPh [urr,vrr,prr];
+{
+  ifstream file("../refSolution/UexVexPex-mesh-"+nummesh+".txt");
+  file >> urr[];
+}
+[ur,vr,pr,nutr] = [urr,vrr,prr,0.];
+
+// load NS solver (requires spaces definition)
+include "libff/lib-ns.idp"
+
+// Initialize assimilation solution (RANS)
+UhxUhxPhxUh [u,v,p,nut],[u0,v0,p0,nut0];
+UhxUhxPh [uu,vv,pp];
+Nh nutb;
+UhxUh [fx,fy],[fx0,fy0]; 
+
+{
+  ifstream file("../../baseRans/results/Baseflow-Re-"+Re+"-nutinf-"+nutinf+"-mesh-"+nummesh+".txt");
+  file >> uu[];
+  file >> nutb[];
+  [u,v,p,nut] = [uu,vv,pp,nutb];
+  u0[]  = u[];
+  fx[]  = 0.0;
+  fx0[] = 0.0;
+}
+
+// Initialize cost function variables
+real     J;                          // cost function value
+UhxUhxPhxUh [um,vm,pm,nutm];         // flow measurements
+UhxUhxPhxUh [ua,va,pa,nuta];         // adjoint solution
+UhxUhxPhxUh [dJdu,dJdv,dJdp,dJdnut]; // J gradient with respect to the flow (adjoint forcing)
+UhxUh [dJdfx,dJdfy];                 // J gradient with respect to fnut
+
+// Cholesky decomposition changes of variables
+varf mass(u,uh) = int2d(th)( u*uh );
+matrix MM = mass(Uh,Uh);
+
+// We perform the lumping in the mass matrix 
+real[int] CCaux(Uh.ndof),CC(Uh.ndof),ones(Uh.ndof);
+ones  = 1.;
+CCaux = MM * ones;
+CC    = sqrt(CCaux);
+
+include "libff/lib-J.idp"
+
+include "libff/lib-grad.idp"
+
+// ------------------------------------------
+// Functions for optim.
+
+func real getJJ(real[int] &fxx){
+  ite += 1;
+  
+  cout << endl;
+  cout << " Iteration of the solver " << ite << endl;
+  cout << endl;
+  
+  Uh ffx,ffy,rhsff;
+  fx[]    = fxx;
+  rhsff   = fx;
+  ffx[]   = rhsff[] ./ CC;
+  rhsff   = fy;
+  ffy[]   = rhsff[] ./ CC;
+  [fx,fy] = [ffx,ffy];
+  
+  // compute NS solution
+  NSiter = NS(u[],u0[],fx[],fx0[],nu,NStoll,NSmaxiter);
+  
+  // compute cost function
+  J = getJ(u[],ur[],dJdu[],fx[]);
+  if(NSiter> 0){ u0[]  = u[]; fx0[] = fx[]; }
+  if(NSiter<=0){ J    *= 100.;}
+  cout << " J = " << J << endl;
+  
+  // Put another line on the file with iteration/J info
+  {
+    ofstream file("../results/J.txt",append);
+    file << ite << " " << J << endl;
+  }
+  
+  // solve adjoint NS
+  AdjNS(ua[],dJdu[],u[],fx[],nu);
+  
+  // compute gradient
+  dJdfx[]  = getdJdfx(u[],ua[],fx[]);
+  
+  {
+    ofstream file("../results/solution-iteration-"+ite+"-mesh-"+nummesh+".txt");
+    file.precision(16);
+    file << u[] << endl;
+    file << fx[] << endl;
+    file << ua[] << endl;
+    file << dJdfx[] << endl;
+  }
+  
+  return J;
+}
+
+
+
+
+func real[int] getdJ(real[int] &fxx){
+  
+  // Load already converged solution
+  {
+    ifstream file("../results/solution-mesh-"+nummesh+".txt");
+    file >> u[];
+    file >> fx[];
+    file >> ua[];
+    file >> dJdfx[];
+  }
+  
+  Uh rhsff,auxx,auxy;
+  rhsff         = dJdfx;
+  auxx[]        = CC .* rhsff[];
+  rhsff         = dJdfy;
+  auxy[]        = CC .* rhsff[];
+  [dJdfx,dJdfy] = [auxx,auxy];
+  
+  // write on file the gradient
+  {
+    ofstream file ("../results/gradient-mesh-"+nummesh+".txt");
+    for(int nbdof = 0; nbdof < UhxUh.ndof; nbdof++){
+      file << dJdfx[][nbdof] << endl;
+    }
+  }
+  
+  return dJdfx[];
+}
+
+getdJ(fx[]);
+

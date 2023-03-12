@@ -1,0 +1,421 @@
+load "MUMPS_seq"
+
+//====================
+// Physical parameters
+//====================
+
+real Re,Reo,nu;             // Reynolds numbers
+real[int] Res = [2810];     // real[int] Res = [300,800,1500,2800];
+real Reinit = 2800;         // Initial Reynolds
+real dpdx = -0.01;          // Force in the x-momentum equation
+real ddpdx;			 // increment in mean pressure
+real intcond=18.315; //(1*9*2.035, imposed integrated streamwise velocity -> imposed bulk velocity of 1)
+real dpdx0 = dpdx;          // Force in the x-momentum equation (initial)
+real Ub = 1.;               // Bulk velocity
+real Ub0 = Ub;              // Bulk velocity (initial)
+real h = 1.;                // Hill height
+real Ly = 3.035;            // Channel height
+
+for(int ij = 0; ij < Res.n; ij++)
+{
+  
+  if(ij==0){
+    Re     = Res[0];        // Reynolds number
+    Reo    = Reinit;        // Previous Reynolds number
+    nu     = 1./Re;}
+  else{
+    Re     = Res[ij];       // Reynolds number
+    Reo    = Res[ij-1];     // Previous Reynolds number
+    nu     = 1./Re;}
+  
+  // ====================
+  // Numerical parameters
+  // ====================
+  
+  int iwait       = 0;      // For graphics
+  int nummesh     = 1;      // Mesh index
+  int nummesho    = 1;      // Index of old mesh
+  int inewtonmax  = 20;     // Maximum of Newton iterations
+  int inewton     = 0;      // if i0=0, start from Re=Reo, otheriwse start from current computation
+  real tolnewton  = 1.e-7;  // Newton tolerance
+  real CFLmin     = 10000;  // Minimum CFL
+  real CFLmax     = 1.e+10; // Maximum CFL
+  real dpdxtoll   = 1.e-4;  // tollerance for dpdx loop convergence
+  real errdpdx    = 1.e+9;  // error for dpdx loop convergence
+  int itedpdx     = 0;      // iteration for dpdx loop
+  real subdpdx    = 1.;     // under-relaxation for dpdx loop
+
+  real err        = 1;
+  real errorratio = 1;
+  
+  real M          = 0.00001;
+  real MSUPG      = 0.1;
+  real a          = 100;
+  
+  real Res0inf,Resninf,Res0L2,ResnL2; // Residuos
+  
+  //=========================================
+  // Fixed parameters for the turbulent model
+  //=========================================
+  
+  real nutinf = 3.;
+  real cv1    = 7.1;
+  real cb1    = 0.1355;
+  real cb2    = 0.622;
+  real sigma  = 2./3.;
+  real kk     = 0.41;
+  real cw1    = 0.1355/(kk^2.) + (1.+cb2)/sigma;
+  real cw2    = 0.3;
+  real cw3    = 2.;
+  
+  //====================
+  // Elements Definition
+  //====================
+  
+  func Pku = P1b;
+  func Pkp = P1;
+  int k    = 2;       // degree of the polynoms (2 for P2dc ...)
+  int kp   = 1;       //Order of interpolation for the pressure
+  int qfo  = 3*k+1;   //order of quadrature
+  
+  //==============
+  // Mesh Building
+  //==============
+  
+  int inlet=1;
+  int outlet=3;
+  mesh th = readmesh("../mesh/mesh"+nummesh+".msh");
+  fespace fuupu(th,[Pku,Pku,Pkp,Pku], periodic=[[inlet,y],[outlet,y]]);
+  fespace fuup(th,[Pku,Pku,Pkp], periodic=[[inlet,y],[outlet,y]]);
+  fespace fu(th,Pku, periodic=[[inlet,y],[outlet,y]]);
+  fespace fp(th,Pkp, periodic=[[inlet,y],[outlet,y]]);
+  fespace f1(th,P1, periodic=[[inlet,y],[outlet,y]]);
+  fespace f0(th,P0, periodic=[[inlet,y],[outlet,y]]);
+  
+  //=====================
+  // Variable declaration
+  //=====================
+  
+  // For variable fields
+  fuup [auxu,auxv,auxp];
+  fuupu [u,v,p,nut],[ub,vb,pb,nutb],[rhsu,rhsv,rhsp,rhsnut];
+  fu auxnut;
+  
+  // For local time step
+  f0 dtlocal,tloc;
+  
+  // For Spallart Almaras
+  fu xi,xi2,xi3,csiSA,dcsiSAdnut,csiNS,dcsiNSdnut,S,dSduv,fv1,dfv1dnu,nuT,fv2,dft2dnu,dStildeduv,dsddxnu,dsddynu,gn,dgndxi;
+  f0 S0,Sbar,dSbardnu,Stilde,dStildednu,r,rp,drdnu,drduv,g,dgdr,fw,dfwdg,dfwdnu,dfwduv,normu;
+  f0 su,dsdnuu,dsduvu;
+  f0 s,dsdnu,dsduv;
+  
+  // For distance function
+  f0 d,d2;
+  {
+    ifstream file("../mesh/distance-mesh-"+nummesh+".txt");
+    file >> d[];
+    plot(d,value=true,cmm="d",wait=iwait);
+    d2 = d*d;
+  }
+  
+  fu dxub,dyub,dxvb,dyvb,dxnutb,dynutb;
+  fu tempu1,tempu2;
+  
+  fu TauSUPG,NormeT,ReT,chiT;
+  fu dNormeTdu,dNormeTdv,dReTdu,dReTdv,dchiT,dTauSUPGdu,dTauSUPGdv;
+  f0 hT,hT2;
+  
+  // The definition of the mesh size hT may be different if the considered mesh has high-aspect-ratio elements (hT) or rather well balanced ones (hT2)
+  hT  = sqrt(2.)*area/hTriangle;
+  hT2 = hTriangle;
+  plot(hT2,cmm="max h",value=1,wait=iwait);
+  plot(hT ,cmm="min h",value=1,wait=iwait);
+  
+  matrix A,DDX,DDY,Mu;
+  
+  
+  //=========================
+  //  Variational Formulation
+  //=========================
+  
+  varf vA([u,v,p,nut],[uh,vh,ph,nuth]) = int2d(th,qforder=qfo)(
+                                                               (1./dtlocal)*( u*uh + v*vh - (1./(a*a))*p*ph + nut*nuth)
+                                                               + csiNS         *( 2.*dx(u )*dx(uh) + (dy(u )+dx(v ))*dx(vh) + (dx(v )+dy(u ))*dy(uh) + 2.*dy(v )*dy(vh) )
+                                                               + dcsiNSdnut*nut*( 2.*dx(ub)*dx(uh) + (dy(ub)+dx(vb))*dx(vh) + (dx(vb)+dy(ub))*dy(uh) + 2.*dy(vb)*dy(vh) )
+                                                               - (dx(u) + dy(v))*ph - ( dx(uh) + dy(vh) )*p
+                                                               + ( u *dx(ub) + ub*dx(u ) + v *dy(ub) + vb*dy(u) ) * ( uh + TauSUPG * ( ub*dx(uh) + vb*dy(uh) ) )
+                                                               + ( u *dx(vb) + ub*dx(v ) + v *dy(vb) + vb*dy(v) ) * ( vh + TauSUPG * ( ub*dx(vh) + vb*dy(vh) ) )
+                                                               + ( ub*dx(ub)             + vb*dy(ub)            ) * (      TauSUPG * ( u *dx(uh) + v *dy(uh) ) + (dTauSUPGdu*u+dTauSUPGdv*v) * ( ub*dx(uh) + vb*dy(uh) ) )
+                                                               + ( ub*dx(vb)             + vb*dy(vb)            ) * (      TauSUPG * ( u *dx(vh) + v *dy(vh) ) + (dTauSUPGdu*u+dTauSUPGdv*v) * ( ub*dx(vh) + vb*dy(vh) ) )
+                                                               + (1./sigma)*csiSA         *(dx(nut )*dx(nuth) + dy(nut )*dy(nuth))
+                                                               + (1./sigma)*dcsiSAdnut*nut*(dx(nutb)*dx(nuth) + dy(nutb)*dy(nuth))
+                                                               + ( ub*dx(nut ) + vb*dy(nut ) + u*dx(nutb) + v*dy(nutb) ) * ( nuth + TauSUPG * ( ub*dx(nuth) + vb*dy(nuth) ) )
+                                                               + ( ub*dx(nutb) + vb*dy(nutb)                           ) * (        TauSUPG * ( u *dx(nuth) + v *dy(nuth) ) + (dTauSUPGdu*u+dTauSUPGdv*v) * ( ub*dx(nuth) + vb*dy(nuth) ) )
+                                                               - dsdnu*nut*nuth
+                                                               - dsduv*(dy(u) - dx(v))*nuth
+                                                               - (dsddxnu*dx(nut) + dsddynu*dy(nut))*nuth )
+                                                               + on(2,u=1.,v=1.,nut=1.);
+  
+  varf vrhs([u,v,p,nut],[uh,vh,ph,nuth]) = - int2d(th,qforder=qfo)(
+                                                               csiNS*( 2.*dx(ub)*dx(uh) + (dy(ub)+dx(vb))*dx(vh) + (dx(vb)+dy(ub))*dy(uh) + 2.*dy(vb)*dy(vh) )
+                                                               - (dx(ub) + dy(vb))*ph - ( dx(uh) + dy(vh) )*pb + dpdx*uh //CPV															  
+															   + ( ub*dx(ub) + vb*dy(ub) ) * ( uh + TauSUPG*(ub*dx(uh) + vb*dy(uh) ) )
+                                                               + ( ub*dx(vb) + vb*dy(vb) ) * ( vh + TauSUPG*(ub*dx(vh) + vb*dy(vh) ) )
+                                                               + (1./sigma)*csiSA*(dx(nutb)*dx(nuth) + dy(nutb)*dy(nuth))
+                                                               + ( ub*dx(nutb) + vb*dy(nutb) ) * ( nuth + TauSUPG*(ub*dx(nuth)+vb*dy(nuth)) )
+                                                               - s*nuth )
+                                                               + on(2,u=-ub,v=-vb,nut=-nutb);
+															   
+  varf vcontmass([u,v,p,nut],[uh,vh,ph,nuth])  = int2d(th,qforder=qfo)(uh);   // For constraint on mass flow rate
+  
+  // Varfs for derivatives
+  varf mass(u,uh) = int2d(th,qforder=qfo)( u*uh );
+  varf DX(u,uh)   = int2d(th,qforder=qfo)( dx(u)*uh );
+  varf DY(u,uh)   = int2d(th,qforder=qfo)( dy(u)*uh );
+  
+  
+  // For constraint on mass flow rate
+  real[int] Bcontmass = vcontmass(0, fuupu);
+  
+  //==================
+  // Matrix definition
+  //==================
+  
+  DDX = DX(fu,fu);
+  DDY = DY(fu,fu);
+  Mu  = mass(fu,fu,solver=sparsesolver);
+  
+  
+  //==================
+  // Initial condition
+  //==================
+  
+  if(Re==Reinit){
+    [ub,vb,pb,nutb] = [1.,0.000000001,0.,nutinf*nu];
+  }
+  else{
+    mesh thr = readmesh("../mesh/mesh"+nummesho+".msh");
+    fespace fuupr(thr,[Pku,Pku,Pkp], periodic=[[inlet,y],[outlet,y]]);
+    fespace fur(thr,Pku, periodic=[[inlet,y],[outlet,y]]);
+    fuupr [ubr,vbr,pbr]; fur nutbr;
+    {
+      ifstream file("./Results/Baseflow-Re-"+Reo+"-nutinf-"+nutinf+"-mesh-"+nummesho+".txt");
+      file >> ubr[];
+      file >> nutbr[];
+    }
+    [ub,vb,pb,nutb] = [ubr,vbr,pbr,nutbr];
+  }
+  
+  plot(ub,value=1,wait=iwait);
+  plot(nutb,value=1,wait=iwait);
+  
+  //=======================
+  // Loop for dpdx
+  //=======================
+
+//  while(errdpdx>dpdxtoll){
+	itedpdx += 1;
+   
+   	// compute new dpdx
+   	dpdx    = dpdx0 - subdpdx*(Ub-1.0)*dpdx0;
+  
+  //=======================
+  // Loop for Newton method
+  //=======================
+ 
+  inewton     = 0;
+  err         = 1.0;
+
+  while( (err > tolnewton) && (inewton<=inewtonmax)){
+    inewton += 1;
+    cout << " " << endl;
+    cout << "Iteration " << inewton << endl;
+    
+    real clock0= clock();
+    
+    // Computation of derivatives of (ub,vb) and nutb
+    //===============================================
+    tempu1 = ub;    tempu2[] = DDX*tempu1[]; dxub[]   = Mu^-1*tempu2[];
+    tempu1 = ub;    tempu2[] = DDY*tempu1[]; dyub[]   = Mu^-1*tempu2[];
+    tempu1 = vb;    tempu2[] = DDX*tempu1[]; dxvb[]   = Mu^-1*tempu2[];
+    tempu1 = vb;    tempu2[] = DDY*tempu1[]; dyvb[]   = Mu^-1*tempu2[];
+    tempu1 = nutb;  tempu2[] = DDX*tempu1[]; dxnutb[] = Mu^-1*tempu2[];
+    tempu1 = nutb;  tempu2[] = DDY*tempu1[]; dynutb[] = Mu^-1*tempu2[];
+    
+    // Computation of SA functions
+    //============================
+    xi = nutb/nu;
+    xi2 = xi*(nutb/nu);
+    xi3 = xi2*(nutb/nu);
+    csiSA = (xi>=0.)*nu*(1.+xi) + (xi<0.)*nu*(1.+xi+0.5*xi2);
+    dcsiSAdnut = (xi>=0.)*1. + (xi<0.)*(1.+xi);
+    fv1 = (xi3)/(xi3 + cv1^3);
+    dfv1dnu = (3./nu)*(cv1^3)*(xi2)/((xi3+cv1^3)^2);
+    nuT = nutb*fv1;
+    csiNS = nu + (nuT>=0.)*nuT;
+    dcsiNSdnut = (nuT>=0.)*(fv1 + nutb*dfv1dnu);
+    S = sqrt((dyub - dxvb)^2 + M^2 ) - M;
+    S0 = S;
+    dSduv = (dyub - dxvb)/sqrt( (dyub - dxvb)^2 + M^2 );
+    fv2 = 1. - xi/( 1. + xi*fv1 );
+    Sbar = nutb*fv2/(kk*kk*d2);
+    dSbardnu = (1./(kk*kk*d2))*( fv2 + xi*(nu*xi2*dfv1dnu - 1.)/((1.+xi*fv1)^2) );
+    Stilde = Sbar + S0;
+    dStildednu = dSbardnu;
+    dStildeduv = dSduv;
+    rp = nutb/(Stilde*kk*kk*d2);
+    r = (rp<0. || rp>10.)*(10.) + (rp>=0. && rp<=10.)*rp;
+    drdnu = (rp>=0. && rp<=10.)*r*(1./nutb - dStildednu/Stilde);
+    drduv = (rp>=0. && rp<=10.)*( - r*dStildeduv/Stilde );
+    g = r + cw2*(r^6-r);
+    dgdr = 1. + cw2*(6.*r^5-1.);
+    
+    fw = g*(( 1. + cw3^6 )/( g^6 + cw3^6 ) )^(1./6.);
+    dfwdg = (((1.+cw3^6)/(g^6+cw3^6))^(1./6.))*( 1. - (g^6)/(g^6+cw3^6) );
+    dfwdnu = dfwdg*dgdr*drdnu;
+    dfwduv = dfwdg*dgdr*drduv;
+    
+    gn = 1. - 1000.*xi2/( 1. + xi2 );
+    dgndxi = - 2000.*xi/( ( 1. + xi2 )^2 );
+    
+    su = (xi>=0.)*( cb1*Stilde*nutb - cw1*fw*(nutb^2)/d2 + (cb2/sigma)*(dxnutb^2 + dynutb^2) )
+    + (xi< 0.)*( cb1*S*nutb*gn   + cw1*(nutb^2)/d2    + (cb2/sigma)*(dxnutb^2 + dynutb^2) );
+    s = su;
+    
+    dsdnuu = (xi>=0.)*( cb1*(dStildednu*nutb + Stilde) - cw1*( dfwdg*dgdr*drdnu*nutb*nutb/d2 + 2.*fw*nutb/d2 ) ) + (xi<0.)*( cb1*S*(gn + xi*dgndxi) + 2.*cw1*nutb/d2 );
+    dsdnu = dsdnuu;
+    
+    dsduvu = (xi>=0.)*( cb1*nutb*dStildeduv - cw1*nutb*nutb*dfwdg*dgdr*drduv/d2 ) + (xi<0.)*cb1*nutb*gn*dSduv;
+    dsduv = dsduvu;
+    
+    dsddxnu = ( 2.*cb2*dxnutb/sigma );
+    dsddynu = ( 2.*cb2*dynutb/sigma );
+    
+    
+    // Stabilization
+    //==============
+    NormeT     = sqrt( ub*ub+vb*vb + MSUPG^2);
+    ReT        = 0.5*NormeT*hT*Re;
+    chiT       = (ReT<=3)*(ReT/3.) + (ReT>3)*(1.);
+    TauSUPG    = chiT*hT/(2.*NormeT);
+    dNormeTdu  = ub/sqrt( ub*ub+vb*vb + MSUPG^2);
+    dNormeTdv  = vb/sqrt( ub*ub+vb*vb + MSUPG^2);
+    dReTdu     = 0.5*hT*dNormeTdu*Re;
+    dReTdv     = 0.5*hT*dNormeTdv*Re;
+    dchiT      = (1./3.)*(ReT<3.);
+    dTauSUPGdu = (hT/2.)*( - (chiT/(NormeT^2))*dNormeTdu + dchiT*dReTdu/NormeT );
+    dTauSUPGdv = (hT/2.)*( - (chiT/(NormeT^2))*dNormeTdv + dchiT*dReTdv/NormeT );
+    //plot(TauSUPG,value=1,fill=1,wait=iwait,cmm="TauSUPG");
+    //plot(dTauSUPGdu,value=1,fill=1,wait=iwait,cmm="dTauSUPGdu");
+    //plot(dTauSUPGdv,value=1,fill=1,wait=iwait,cmm="dTauSUPGdv");
+    
+    real clock1 = clock();
+    cout << "Time for computing SA functions : " << (clock1-clock0) << endl;
+    
+    
+    // Construction of right-hand side
+    //================================
+    rhsu[] = vrhs(0,fuupu);
+    
+    // Compute norm of residual
+    //=========================
+    if(inewton==1){ Res0L2 = rhsu[].l2; Res0inf = rhsu[].linfty; }
+    ResnL2 = rhsu[].l2; Resninf = rhsu[].linfty;
+    errorratio = max(ResnL2/Res0L2,Resninf/Res0inf);
+    err = max(ResnL2,Resninf);
+    
+    //plot(rhsu,value=true,cmm="rhsu",wait=iwait);
+    //plot(rhsv,value=true,cmm="rhsv",wait=iwait);
+    //plot(rhsp,value=true,cmm="rhsp",wait=iwait);
+    //plot(rhsnut,value=true,cmm="rhsnut",wait=iwait);
+    
+    cout << "iter=  " << inewton << " , resl2=  " << ResnL2 << " , resinf=  " << Resninf << endl;
+    if(err<tolnewton) break;
+    
+    
+    // Compute Local time step dtloc = CFL*hTriangle/||u||
+    //====================================================
+    real CFL = min(CFLmin/(errorratio^1.5),CFLmax)*inewton;
+    tloc = min(hTriangle/(sqrt(ub^2 + vb^2) + sqrt(ub^2 + vb^2 + a*a) ),0.5*hTriangle*hTriangle/nu);
+    dtlocal = CFL*tloc;
+    
+    real clock2 = clock();
+    cout << "Time for computing residual : " << (clock2-clock1) << endl;
+    
+    
+    // Construction of matrix
+    //=======================
+    A = vA(fuupu,fuupu,solver=GMRES);
+    
+    real clock3 = clock();
+    cout << "Time for matrix construction : " << (clock3-clock2) << endl;
+    
+    
+    // Factorization of matrix
+    //========================
+    set(A,solver=sparsesolver);
+    
+    real clock4 = clock();
+    cout << "Time for matrix LU : " << (clock4-clock3) << endl;
+    
+	// Augmented system to impose integrated streamwise velocity <-> bulk velocity
+    //========================
+	real intflow;
+	intflow=Bcontmass'*ub[];
+	
+	matrix AA=[[A, Bcontmass],[Bcontmass' ,0]];
+	set(AA,solver=sparsesolver);
+	real[int] fullrhs,fullsol;
+    fullrhs.resize(rhsu[].n+1);
+	fullsol.resize(ub[].n+1);
+    
+    fullrhs = [rhsu[], intcond-intflow];
+    
+    // Resolution
+    //===========
+    cout << "before inversion" << endl;
+	fullsol=AA^-1*fullrhs;
+	 cout << "after inversion" << endl;
+    //u[] = A^-1*rhsu[];
+	u[]=fullsol(0:fullsol.n-2);
+	ddpdx=fullsol(fullsol.n-1);
+	dpdx=dpdx+ddpdx;
+	cout << "dpdx=" << dpdx <<  endl;
+	
+    ub[] += u[];
+    real clock5 = clock();
+    
+    plot(ub,value=true,cmm="ub-CFL="+CFL,wait=iwait);
+    //plot(vb,value=true,cmm="vb",wait=iwait);
+    //plot(pb,value=true,cmm="pb",wait=iwait);
+    plot(nutb,value=true,cmm="nutb",wait=iwait);
+    plot(nuT,value=true,cmm="nuT",wait=iwait);
+    plot(csiNS,value=true,cmm="csiNS",wait=iwait);
+    
+    //Ub = int1d(th,inlet)( ub * N.x + vb * N.y );
+    Ub = int1d(th,outlet)([ub,vb]'*[N.x,N.y])/(Ly-h);
+    cout << " Bulk velocity = " << Ub << endl;
+
+    } // end of while loop
+	
+   errdpdx = abs(Ub-1.0);
+   dpdx0   = dpdx;
+
+   cout << endl;
+   cout << " ----------------------------------- " << endl;
+   cout << "dpdx = " << dpdx << " , |Ub - 1.0| = " << errdpdx << endl;
+   cout << " ----------------------------------- " << endl;
+   cout << endl;
+ 
+//  } // end of dpdx loop
+                               
+  //======================================================
+  // Save the solution in the format [ub,vb,pb] and [nutb]
+  //======================================================
+
+  fuup [ubb,vbb,pbb] = [ub,vb,pb]; fu nutbb = nutb;
+  ofstream file("./Results/Baseflow-Re-"+Re+"-nutinf-"+nutinf+"-mesh-"+nummesh+".txt");
+  file << ubb[]; file << nutbb[];
+    
+} // end of for loop

@@ -1,0 +1,142 @@
+include "getARGV.idp"
+load "MUMPS"
+load "bfstream"
+
+// physical parameters
+real Re      = 19000;   // Reynolds number
+real nu      = 1./Re;   // molecular viscosity
+real nutinf  = 3.;
+
+// numerical parameters
+int NSmaxiter  = 20;    // maximum number of iteration for NS solver
+int NSiter;             // number of Newton iteration for NS solver
+real NStoll    = 1.e-8; // tollerance for NS solver
+real NNtoll    = 1.e-4; // tollerance for NN solution convergence
+real errNN     = 1.e+9; // error for NN convergence
+bool waitplt   = false; // flag to wait after plot
+int ite        = 0;     // optim. iteration
+
+// subrelaxation
+real subfx   = 0.50;
+real subdpdx = 1.0;
+
+// mesh and FEM spaces
+int nummesh = 2;
+int inlet = 1;
+int outlet = 3;
+mesh th = readmesh("../mesh/mesh"+nummesh+".msh");
+
+// define spaces
+func Pku = P1b;
+func Pkp = P1;
+fespace UhxUhxPhxUh(th,[Pku,Pku,Pkp,Pku], periodic=[[inlet,y],[outlet,y]]); // RANS flow
+fespace UhxUhxPh(th,[Pku,Pku,Pkp], periodic=[[inlet,y],[outlet,y]]);        // (u,v,p) flow
+fespace UhxUh(th,[Pku,Pku], periodic=[[inlet,y],[outlet,y]]);               // (fx,fy) flow
+fespace Uh(th,Pku, periodic=[[inlet,y],[outlet,y]]);                        // velocity component
+fespace Ph(th,Pkp, periodic=[[inlet,y],[outlet,y]]);                        // pressure
+fespace Nh(th,Pku, periodic=[[inlet,y],[outlet,y]]);                        // turbulent viscosity
+fespace P0h(th,P0, periodic=[[inlet,y],[outlet,y]]);                        // P0 FEM space
+
+// load NS solver (requires spaces definition)
+include "libff/lib-ns.idp"
+
+// load NN utils
+include "libff/lib-nn.edp"
+
+// Initialize assimilation solution (RANS)
+UhxUhxPhxUh [u,v,p,nut],[u0,v0,p0,nut0];
+UhxUhxPh [uu,vv,pp];
+Nh nutb;
+UhxUh [fx,fy],[fx0,fy0],[gx,gy]; 
+real dpdx,dpdx0;
+dpdx = -0.0075; // CHANGE HERE TO THE CORRECT VALUE
+dpdx0 = dpdx;
+
+{
+	ifstream file("../baseRans/results/Baseflow-Re-"+Re+"-nutinf-"+nutinf+"-mesh-"+nummesh+".txt");
+	file >> uu[];
+	file >> nutb[];
+	[u,v,p,nut] = [uu,vv,pp,nutb];
+	u0[]  = u[];
+	fx[]  = 0.0; 
+	fx0[] = 0.0;
+}
+
+// =======================================
+// Call function to read NN weights/biases
+//========================================
+
+// 1- Read the headlines of structure (needed for knowing the size of the vector to-be-read)
+int nInputs,nHidden,nOutputs,nLayers;
+
+{
+  ifstream fileX("libff/parameters_in12_out2_4hid80_FreeFem.dat");
+  fileX >> nInputs;    // no. of nodes in
+  fileX >> nHidden;    // no. of nodes hidden
+  fileX >> nOutputs;   // no. of nodes out
+  fileX >> nLayers;    // no. of hidden layers
+}
+
+cout << "no. of nodes in      : " << nInputs << endl;
+cout << "no. of nodes hidden  : " << nHidden << endl;
+cout << "no. of nodes out     : " << nOutputs << endl;
+cout << "no. of hidden layers : " << nLayers << endl;
+
+// 2- Allocation (NOT general)
+
+real[int,int] Win(nHidden,nInputs);
+real[int,int] Wh1(nHidden,nHidden); //Wh(nHidden * nHidden * nLayers)
+real[int,int] Wh2(nHidden,nHidden);
+real[int,int] Wh3(nHidden,nHidden);
+real[int,int] Wh4(nHidden,nHidden);
+real[int,int] Wout(nOutputs,nHidden);
+real[int] Bin(nHidden);
+real[int,int] Bh(nHidden,nLayers);
+real[int] Bout(nOutputs);
+
+// Variables will be update inside the function readNN
+int dummy = readNN(Win,Wh1,Wh2,Wh3,Wh4,Wout,Bin,Bh,Bout);
+
+//========================================
+// NN solution convergence
+//========================================
+
+while(errNN>NNtoll){
+	ite += 1;
+	
+	// compute fx,fy
+	gx[] = fxfyNN(u[],Win,Wh1,Wh2,Wh3,Wh4,Wout,Bin,Bh,Bout,nInputs,nHidden,nOutputs,nLayers);
+	
+	fx[]  = subfx       * gx[];
+	fx[] += (1.0-subfx) * fx0[];
+	
+	// compute Bulk velocity
+	real Ub = int1d(th,outlet)([u,v]'*[N.x,N.y])/(2.035);
+  cout << " Bulk velocity = " << Ub << endl;
+
+	// compute new dpdx
+	dpdx = dpdx0 - subdpdx*(Ub-1.0)*dpdx0;
+	cout << "dpdx = " << dpdx << endl;
+	
+	// compute NS solution
+	NSiter = NS(u[],u0[],fx[],fx0[],nu,dpdx,NStoll,NSmaxiter);
+  
+	// compute error, in variation of (fx,fy)
+	errNN = int2d(th)( (fx-fx0)^2 + (fy-fy0)^2 )/subfx ;//+ abs(dpdx-dpdx0)/subdpdx;
+	cout << "Error in force: " << errNN << " (tolerance " << NNtoll << ")" << endl;
+
+	// compute error, in variation of (u,v)
+	errNN = int2d(th)( (u-u0)^2 + (v-v0)^2 );// + abs(Ub-1.0);
+	cout << "Error in velocity: " << errNN << " (tolerance " << NNtoll << ")" << endl;
+	
+	fx0[] = fx[];
+	u0[]  = u[];
+	dpdx0 = dpdx;
+}
+
+{
+	ofstream file("./results/solution-NN-mesh-"+nummesh+".txt");
+	file.precision(16);
+	file << u[] << endl;
+	file << fx[] << endl;
+}

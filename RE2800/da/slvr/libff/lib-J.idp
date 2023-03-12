@@ -1,0 +1,23 @@
+
+////////////////////////////////////////////////////////////////////////////////
+func real getJ(real[int] &flow, real[int] &ref, real[int] &grad,
+							 real[int] &control)
+{
+	cout << "getJ function:" << endl;
+
+	// Unwrap inputs
+	UhxUhxPhxUh [u ,v ,p ,nut];  u[]      = flow;
+	UhxUhxPhxUh [ur,vr,pr,nutr]; ur[]     = ref;
+
+	// compute measurements (interpolation)
+	UhxUhxPhxUh [um,vm,pm,nutm]; [um,vm,pm,nutm] = [u,v,p,nut]; 
+
+	// compute cost function
+	real J = int2d(th)( 0.5 * ( (um-ur)^2 + (vm-vr)^2 ) );
+	
+	// compute gradient 
+	UhxUhxPhxUh [dJduu,dJdvv,dJdpp,dJdnutt]=[(um-ur),(vm-vr),0.0,0.0];
+
+	// output
+	grad=dJduu[]; return J;
+}

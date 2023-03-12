@@ -1,0 +1,354 @@
+
+func int readNN(real[int,int] &Win,
+                real[int,int] &Wh1,
+                real[int,int] &Wh2,
+                real[int,int] &Wh3,
+                real[int,int] &Wh4,
+                real[int,int] &Wout,
+                real[int] &Bin,
+                real[int,int] &Bh,
+                real[int] &Bout){
+  
+  // 1- Read structure
+  
+  ifstream fileX("libff/parameters_in12_out2_4hid80_FreeFem.dat");
+  
+  int nInputs,nHidden,nOutputs,nLayers;
+  {
+    fileX >> nInputs;    // no. of nodes in
+    fileX >> nHidden;    // no. of nodes hidden
+    fileX >> nOutputs;   // no. of nodes out
+    fileX >> nLayers;    // no. of hidden layers
+  }
+  
+  int j,k,l;
+  
+  // 2- Input layer weights
+  for(k=0;k<nHidden;k++){
+    for(j=0;j<nInputs;j++){
+      fileX >> Win(k,j);
+    }
+  }
+  
+  // 3- Hidden layer weights x nLayers
+  for(k=0;k<nHidden;k++){
+    for(j=0;j<nHidden;j++){
+      fileX >> Wh1(k,j);
+      // fileX >> Wh1(k + nHidden*j + nLayers*l);
+    }
+  }
+  
+  for(k=0;k<nHidden;k++){
+    for(j=0;j<nHidden;j++){
+      fileX >> Wh2(k,j);
+    }
+  }
+  
+  for(k=0;k<nHidden;k++){
+    for(j=0;j<nHidden;j++){
+      fileX >> Wh3(k,j);
+    }
+  }
+  
+  for(k=0;k<nHidden;k++){
+    for(j=0;j<nHidden;j++){
+      fileX >> Wh4(k,j);
+    }
+  }
+  
+  // 4- Output layer weights
+  for(k=0;k<nOutputs;k++){
+    for(j=0;j<nHidden;j++){
+      fileX >> Wout(k,j);
+    }
+  }
+  
+  // 5- biases input layer
+  for(k=0;k<nHidden;k++){
+    fileX >> Bin(k);
+  }
+  
+  // 6- Array of biases hidden
+  for(l=0;l<nLayers;l++){
+    for(j=0;j<nHidden;j++){
+      fileX >> Bh(j,l);
+    }
+  }
+  
+  // 7- biases output layer
+  for(k=0;k<nOutputs;k++){
+    fileX >> Bout(k);
+  }
+  
+  return 0;
+}
+
+func real[int] fxfyNN(real[int] &flow,
+                      real[int,int] &Win,
+                      real[int,int] &Wh1,
+                      real[int,int] &Wh2,
+                      real[int,int] &Wh3,
+                      real[int,int] &Wh4,
+                      real[int,int] &Wout,
+                      real[int] &Bin,
+                      real[int,int] &Bh,
+                      real[int] &Bout,
+                      int nInputs, int nHidden,
+                      int nOutputs, int nLayers){
+  
+  // SA constants
+  real nutinf = 3.;
+  real cv1    = 7.1;
+  real cb1    = 0.1355;
+  real cb2    = 0.622;
+  real sigma  = 2./3.;
+  real kk     = 0.41;
+  real cw1    = 0.1355/(kk^2.) + (1.+cb2)/sigma;
+  real cw2    = 0.3;
+  real cw3    = 2.;
+  real M      = 0.00001;
+  
+  // Unwrap inputs
+  UhxUhxPhxUh [ub,vb,pb,nutb]; ub[] = flow;
+  
+  // force, to be computed
+  UhxUh [fx,fy];
+  
+  // For distance function
+  P0h d,d2;
+  {
+    ifstream file("../mesh/distance-mesh-"+nummesh+".txt");
+    file >> d[];
+    d2 = d*d;
+  }
+  
+  // For Spallart Almaras
+  Uh xi,xi2,xi3,csiSA,dcsiSAdnut,csiNS,dcsiNSdnut,S,dSduv,fv1,dfv1dnu,nuT,fv2,dft2dnu,dStildeduv,dsddxnu,dsddynu,gn,dgndxi;
+  P0h S0,Sbar,dSbardnu,Stilde,dStildednu,r,rp,drdnu,drduv,g,dgdr,fw,dfwdg,dfwdnu,dfwduv,normu;
+  P0h su,dsdnuu,dsduvu;
+  P0h s,dsdnu,dsduv;
+  
+  // ===========================
+  // Computation of SA functions
+  //============================
+  
+  xi = nutb/nu;
+  xi2 = xi*(nutb/nu);
+  xi3 = xi2*(nutb/nu);
+  csiSA = (xi>=0.)*nu*(1.+xi) + (xi<0.)*nu*(1.+xi+0.5*xi2);
+  dcsiSAdnut = (xi>=0.)*1. + (xi<0.)*(1.+xi);
+  fv1 = (xi3)/(xi3 + cv1^3);
+  dfv1dnu = (3./nu)*(cv1^3)*(xi2)/((xi3+cv1^3)^2);
+  nuT = nutb*fv1;
+  csiNS = nu + (nuT>=0.)*nuT;
+  dcsiNSdnut = (nuT>=0.)*(fv1 + nutb*dfv1dnu);
+  S = sqrt((dy(ub) - dx(vb))^2 + M^2 ) - M;
+  S0 = S;
+  dSduv = (dy(ub) - dx(vb))/sqrt( (dy(ub) - dx(vb))^2 + M^2 );
+  fv2 = 1. - xi/( 1. + xi*fv1 );
+  Sbar = nutb*fv2/(kk*kk*d2);
+  dSbardnu = (1./(kk*kk*d2))*( fv2 + xi*(nu*xi2*dfv1dnu - 1.)/((1.+xi*fv1)^2) );
+  Stilde = Sbar + S0;
+  dStildednu = dSbardnu;
+  dStildeduv = dSduv;
+  rp = nutb/(Stilde*kk*kk*d2);
+  r = (rp<0. || rp>10.)*(10.) + (rp>=0. && rp<=10.)*rp;
+  drdnu = (rp>=0. && rp<=10.)*r*(1./nutb - dStildednu/Stilde);
+  drduv = (rp>=0. && rp<=10.)*( - r*dStildeduv/Stilde );
+  g = r + cw2*(r^6-r);
+  dgdr = 1. + cw2*(6.*r^5-1.);
+  
+  fw = g*(( 1. + cw3^6 )/( g^6 + cw3^6 ) )^(1./6.);
+  dfwdg = (((1.+cw3^6)/(g^6+cw3^6))^(1./6.))*( 1. - (g^6)/(g^6+cw3^6) );
+  dfwdnu = dfwdg*dgdr*drdnu;
+  dfwduv = dfwdg*dgdr*drduv;
+  
+  gn = 1. - 1000.*xi2/( 1. + xi2 );
+  dgndxi = - 2000.*xi/( ( 1. + xi2 )^2 );
+  
+  su = (xi>=0.)*( cb1*Stilde*nutb - cw1*fw*(nutb^2)/d2 + (cb2/sigma)*(dx(nutb)^2 + dy(nutb)^2) )
+  + (xi< 0.)*( cb1*S*nutb*gn   + cw1*(nutb^2)/d2    + (cb2/sigma)*(dx(nutb)^2 + dy(nutb)^2) );
+  s = su;
+  
+  dsdnuu = (xi>=0.)*( cb1*(dStildednu*nutb + Stilde) - cw1*( dfwdg*dgdr*drdnu*nutb*nutb/d2 + 2.*fw*nutb/d2 ) ) + (xi<0.)*( cb1*S*(gn + xi*dgndxi) + 2.*cw1*nutb/d2 );
+  dsdnu = dsdnuu;
+  
+  dsduvu = (xi>=0.)*( cb1*nutb*dStildeduv - cw1*nutb*nutb*dfwdg*dgdr*drduv/d2 ) + (xi<0.)*cb1*nutb*gn*dSduv;
+  dsduv = dsduvu;
+  
+  dsddxnu = ( 2.*cb2*dx(nutb)/sigma );
+  dsddynu = ( 2.*cb2*dy(nutb)/sigma );
+  
+  
+  // Compute feature Q1: Q criterion
+  Uh num,den,aux,Smag,Omag,Q1;
+  Smag = sqrt( dx(ub)^2 + dy(vb)^2 + (dy(ub) + dx(vb))^2 ) ;
+  Omag = sqrt( (dy(ub) - dx(vb))^2 ) ;
+  num = 0.5*(Omag^2-Smag^2);
+  den = num+Smag^2;
+  Q1 = num/den;
+  
+  // Compute feature Q3: Streamline pressure gradient
+  Uh Ecin,Q2;
+  Ecin = ub*ub + vb*vb;
+  num = ub*dx(pb) + vb*dy(pb) ;
+  den = abs(num) + sqrt( Ecin*((dx(pb))^2 + (dy(pb))^2) );
+  Q2 = num/den;
+  
+  // Compute feature Q4: Ratio of pressure normal stresses to shear stresses
+  Uh Q3;
+  num = sqrt( (dx(pb))^2 + (dy(pb))^2 ) ;
+  den = num + abs(ub*dx(ub) + vb*dy(vb));
+  Q3 = num/den;
+  
+  // Compute feature Q5: Nonorthogonality between velocity and its gradient
+  Uh Q4;
+  num =  sqrt( (ub*ub*dx(ub))^2 + (ub*vb*dy(ub))^2 + (vb*ub*dx(vb))^2 + (vb*vb*dy(vb))^2 );
+      //ul ul ui dj(ui) uk dj(uk)
+  aux = ub*ub*ub*dx(ub)*ub*dx(ub) + // l=1 i=1 j=1 k=1
+        ub*ub*ub*dx(ub)*vb*dx(vb) + // l=1 i=1 j=1 k=2
+        ub*ub*ub*dy(ub)*ub*dy(ub) + // l=1 i=1 j=2 k=1
+        ub*ub*ub*dy(ub)*vb*dy(vb) + // l=1 i=1 j=2 k=2
+        ub*ub*vb*dx(vb)*ub*dx(ub) + // l=1 i=2 j=1 k=1
+        ub*ub*vb*dy(vb)*ub*dy(ub) + // l=1 i=2 j=2 k=1
+        ub*ub*vb*dx(vb)*vb*dx(vb) + // l=1 i=2 j=1 k=2
+        ub*ub*vb*dy(vb)*vb*dy(vb) + // l=1 i=2 j=2 k=2
+        vb*vb*ub*dx(ub)*ub*dx(ub) + // l=2 i=1 j=1 k=1
+        vb*vb*ub*dx(ub)*vb*dx(vb) + // l=2 i=1 j=1 k=2
+        vb*vb*ub*dy(ub)*ub*dy(ub) + // l=2 i=1 j=2 k=1
+        vb*vb*ub*dy(ub)*vb*dy(vb) + // l=2 i=1 j=2 k=2
+        vb*vb*vb*dx(vb)*ub*dx(ub) + // l=2 i=2 j=1 k=1
+        vb*vb*vb*dy(vb)*ub*dy(ub) + // l=2 i=2 j=2 k=1
+        vb*vb*vb*dx(vb)*vb*dx(vb) + // l=2 i=2 j=1 k=2
+        vb*vb*vb*dy(vb)*vb*dy(vb) ; // l=2 i=2 j=2 k=2
+  den = abs(num) + sqrt(aux);
+  Q4 = num/den;
+  
+  // Compute feature Q6: Viscosity ratio
+  Uh Q5;
+  num =  nutb * fv1;
+  den = num + 100.*nu;
+  Q5 = num/den;
+  
+  // Compute feature Q7: SA - wall influence
+  Uh Q6;
+  Q6 = 1./(1+r);
+  
+  // Compute feature Q9: SA - destruction
+  Uh Q7;
+  num =  ( cw1 * fw )*(nutb/d)^2;
+  den = abs(num) + (cb2/sigma)*(dx(nutb)^2 + dy(nutb)^2);
+  Q7 = num/den;
+  
+  // Compute feature Q10: SA - production
+  Uh Q8;
+  num =  abs(cb1 * Stilde * nutb ) ;
+  den = abs(num) + (cb2/sigma)*(dx(nutb)^2 + dy(nutb)^2);
+  Q8 = num/den;
+  
+  // Compute feature Q11: k_qcr
+  Uh Q9 ;
+  num = abs(5.303300858899107  * nutb * fv1 * Smag);
+  den = num + 0.5*Ecin;
+  Q9  = num/den;
+  
+  // Compute feature Q12: Streamline curvature
+  Uh Q10,udju1,udju2,dGds1,dGds2;
+  udju1 = ub*dx(ub)+vb*dx(vb);
+  udju2 = ub*dy(ub)+vb*dy(vb);
+  dGds1 = ub/sqrt(Ecin) * (Ecin^2 * dx(ub) - ub*udju1) / sqrt(Ecin)^3 + vb/sqrt(Ecin) * (Ecin^2 * dy(ub) - ub*udju2) / sqrt(Ecin)^3;
+  dGds2 = ub/sqrt(Ecin) * (Ecin^2 * dx(vb) - vb*udju1) / sqrt(Ecin)^3 + vb/sqrt(Ecin) * (Ecin^2 * dy(vb) - vb*udju2) / sqrt(Ecin)^3;
+  num = sqrt(dGds1^2 + dGds2^2);
+  den = abs(num) + sqrt(abs(5.303300858899107  * nutb * fv1 * Smag))/(nutb * fv1);
+  Q10 = num/den;
+  
+  
+  // Compute feature Q15/Q16: cos\alpha, sin\alpha
+  Uh Q11 = 1.;
+  Uh Q12 = 0.;
+  
+  
+  // ===========================
+  // COMPUTE FORCES
+  //============================
+  
+  int j;
+  real[int] aj(nHidden),bj(nHidden);
+  real[int] eta(12);
+  real[int] fnn(2);
+  Uh fxnn, fynn;
+  
+  for (int i=0; i<Uh.ndof; i++){
+    
+    eta(0)=Q1[][i];
+    eta(1)=Q2[][i];
+    eta(2)=Q3[][i];
+    eta(3)=Q4[][i];
+    eta(4)=Q5[][i];
+    eta(5)=Q6[][i];
+    eta(6)=Q7[][i];
+    eta(7)=Q8[][i];
+    eta(8)=Q9[][i];
+    eta(9)=Q10[][i];
+    eta(10)=Q11[][i];
+    eta(11)=Q12[][i];
+    
+    // first layer linear mapping and relu
+    aj = Win * eta;
+    aj += Bin;
+    
+    for (j=0;j<nHidden;j++) {
+      if (aj(j)<0.) aj(j) = 0.;
+    }
+    
+    // hidden layer 1 linear mapping and relu
+    
+    bj = Wh1 * aj;
+    aj = bj + Bh(:,0);
+    
+    for (j=0;j<nHidden;j++) {
+      if (aj(j)<0.) aj(j) = 0.;
+    }
+    
+    // hidden layer 2 linear mapping and relu
+    
+    bj = Wh2 * aj;
+    aj = bj + Bh(:,1);
+    
+    for (j=0;j<nHidden;j++) {
+      if (aj(j)<0.) aj(j) = 0.;
+    }
+    
+    // hidden layer 3 linear mapping and relu
+    
+    bj = Wh3 * aj;
+    aj = bj + Bh(:,2);
+    
+    for (j=0;j<nHidden;j++) {
+      if (aj(j)<0.) aj(j) = 0.;
+    }
+    
+    // hidden layer 4 linear mapping and relu
+    
+    bj = Wh4 * aj;
+    aj = bj + Bh(:,3);
+    
+    for (j=0;j<nHidden;j++) {
+      if (aj(j)<0.) aj(j) = 0.;
+    }
+    
+    // output linear mapping
+    fnn = Wout * aj;
+    fnn += Bout;
+    
+    fxnn[][i] = fnn(0);
+    fynn[][i] = fnn(1);
+    
+  }
+  
+  // Write fx,fy in the 'fuu' space format
+  [fx,fy] = [fxnn,fynn];
+  
+  return fx[];
+}
+

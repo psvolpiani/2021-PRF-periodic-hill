@@ -1,0 +1,160 @@
+// Parameters
+
+int nummesh = 2;    // Mesh index
+real Re = 19000;    // Reynolds number
+real nu = 1./Re;    // Viscosity
+func Pku = P1b;     // Polynomial type for velocity
+func Pkp = P1;      // Polynomial type for pressure
+int ku = 2;         // degree of the polynoms (2 for P2dc ...)
+int kp = 1;         //Order of interpolation for the pressure
+int qfo = 3*ku+1;   //order of quadrature
+int inlet=1;        // Inlet index
+int outlet=3;       // Outlet index
+
+// SA constants
+
+real nutinf = 3.;
+real cv1    = 7.1;
+real cb1    = 0.1355;
+real cb2    = 0.622;
+real sigma  = 2./3.;
+real kk     = 0.41;
+real cw1    = 0.1355/(kk^2.) + (1.+cb2)/sigma;
+real cw2    = 0.3;
+real cw3    = 2.;
+real M      = 0.00001;
+
+// Read mesh and create finite element space
+
+mesh th = readmesh("../mesh/mesh"+nummesh+".msh");
+fespace fuupu(th,[Pku,Pku,Pkp,Pku], periodic=[[inlet,y],[outlet,y]]);
+fespace fuu(th,[Pku,Pku], periodic=[[inlet,y],[outlet,y]]);
+fespace fu(th,Pku, periodic=[[inlet,y],[outlet,y]]);
+fespace f0(th,P0, periodic=[[inlet,y],[outlet,y]]);
+int ndof = fuupu.ndof;
+int nbv = th.nv;
+int nbt = th.nt;
+
+// Declare variables and load solution
+
+fuupu [ub,vb,pb,nutb];          // RANS flow
+fuu   [fx,fy];                  // (fx,fy) flow
+{
+  ifstream file("./results/solution-NN-mesh-"+nummesh+".txt");
+  file >> ub[];
+  file >> fx[];
+}
+
+// For distance function
+
+f0 d,d2;
+{
+  ifstream file("../mesh/distance-mesh-"+nummesh+".txt");
+  file >> d[];
+  d2 = d*d;
+}
+
+// For Spallart Almaras
+fu xi,xi2,xi3,csiSA,dcsiSAdnut,csiNS,dcsiNSdnut,S,dSduv,fv1,dfv1dnu,nuT,fv2,dft2dnu,dStildeduv,dsddxnu,dsddynu,gn,dgndxi;
+f0 S0,Sbar,dSbardnu,Stilde,dStildednu,r,rp,drdnu,drduv,g,dgdr,fw,dfwdg,dfwdnu,dfwduv,normu;
+f0 su,dsdnuu,dsduvu;
+f0 s,dsdnu,dsduv;
+
+// ===========================
+// Computation of SA functions
+//============================
+
+xi = nutb/nu;
+xi2 = xi*(nutb/nu);
+xi3 = xi2*(nutb/nu);
+csiSA = (xi>=0.)*nu*(1.+xi) + (xi<0.)*nu*(1.+xi+0.5*xi2);
+dcsiSAdnut = (xi>=0.)*1. + (xi<0.)*(1.+xi);
+fv1 = (xi3)/(xi3 + cv1^3);
+dfv1dnu = (3./nu)*(cv1^3)*(xi2)/((xi3+cv1^3)^2);
+nuT = nutb*fv1;
+csiNS = nu + (nuT>=0.)*nuT;
+dcsiNSdnut = (nuT>=0.)*(fv1 + nutb*dfv1dnu);
+S = sqrt((dy(ub) - dx(vb))^2 + M^2 ) - M;
+S0 = S;
+dSduv = (dy(ub) - dx(vb))/sqrt( (dy(ub) - dx(vb))^2 + M^2 );
+fv2 = 1. - xi/( 1. + xi*fv1 );
+Sbar = nutb*fv2/(kk*kk*d2);
+dSbardnu = (1./(kk*kk*d2))*( fv2 + xi*(nu*xi2*dfv1dnu - 1.)/((1.+xi*fv1)^2) );
+Stilde = Sbar + S0;
+dStildednu = dSbardnu;
+dStildeduv = dSduv;
+rp = nutb/(Stilde*kk*kk*d2);
+r = (rp<0. || rp>10.)*(10.) + (rp>=0. && rp<=10.)*rp;
+drdnu = (rp>=0. && rp<=10.)*r*(1./nutb - dStildednu/Stilde);
+drduv = (rp>=0. && rp<=10.)*( - r*dStildeduv/Stilde );
+g = r + cw2*(r^6-r);
+dgdr = 1. + cw2*(6.*r^5-1.);
+
+fw = g*(( 1. + cw3^6 )/( g^6 + cw3^6 ) )^(1./6.);
+dfwdg = (((1.+cw3^6)/(g^6+cw3^6))^(1./6.))*( 1. - (g^6)/(g^6+cw3^6) );
+dfwdnu = dfwdg*dgdr*drdnu;
+dfwduv = dfwdg*dgdr*drduv;
+
+gn = 1. - 1000.*xi2/( 1. + xi2 );
+dgndxi = - 2000.*xi/( ( 1. + xi2 )^2 );
+
+su = (xi>=0.)*( cb1*Stilde*nutb - cw1*fw*(nutb^2)/d2 + (cb2/sigma)*(dx(nutb)^2 + dy(nutb)^2) )
++ (xi< 0.)*( cb1*S*nutb*gn   + cw1*(nutb^2)/d2    + (cb2/sigma)*(dx(nutb)^2 + dy(nutb)^2) );
+s = su;
+
+dsdnuu = (xi>=0.)*( cb1*(dStildednu*nutb + Stilde) - cw1*( dfwdg*dgdr*drdnu*nutb*nutb/d2 + 2.*fw*nutb/d2 ) ) + (xi<0.)*( cb1*S*(gn + xi*dgndxi) + 2.*cw1*nutb/d2 );
+dsdnu = dsdnuu;
+
+dsduvu = (xi>=0.)*( cb1*nutb*dStildeduv - cw1*nutb*nutb*dfwdg*dgdr*drduv/d2 ) + (xi<0.)*cb1*nutb*gn*dSduv;
+dsduv = dsduvu;
+
+dsddxnu = ( 2.*cb2*dx(nutb)/sigma );
+dsddynu = ( 2.*cb2*dy(nutb)/sigma );
+
+// Compute f_SA:
+fu S11, S12, S22, fxSA, fySA;
+S11 = dx(ub);
+S22 = dy(vb);
+S12 = 0.5 * ( dx(vb) + dy(ub) );
+S11 = 2 * nutb * fv1 * S11;
+S22 = 2 * nutb * fv1 * S22;
+S12 = 2 * nutb * fv1 * S12;
+fxSA = (dx(S11) + dy(S12));
+fySA = (dx(S12) + dy(S22));
+
+// Compute f_sum:
+fu fxsum, fysum;
+fxsum = fx + fxSA;
+fysum = fy + fySA;
+
+// Export tecplot file
+
+{
+  ofstream file("tcpNN-Re-"+Re+"-nutinf-"+nutinf+"-mesh-"+nummesh+".dat");
+  file <<"TITLE = "<<"PHILL"<<endl;
+  file << "VARIABLES = \"X\" ,  \"Y\" , \"ub\" , \"vb\" , \"pb\" , \"nut-SA\" , \"fx_DA\", \"fy_DA\" , \"fx_SA\" , \"fy_SA\" , \"fx_sum\" , \"fy_sum\" " << endl;
+  file << "ZONE"<<"   "<<"N="<<th.nv<<","<<"E="<<th.nt<<","<<"F=FEPOINT,ET=TRIANGLE"<<endl;
+  
+  for (int i=0; i<nbv; i++){
+  real xt = th(i).x;
+  real yt = th(i).y;
+  file  << xt << " "
+        << yt << " "
+        << ub(xt,yt) << " "
+        << vb(xt,yt) << " "
+        << pb(xt,yt) << " "
+        << nutb(xt,yt) << " "
+        << fx(xt,yt) << " "
+        << fy(xt,yt) << " "
+        << fxSA(xt,yt) << " "
+        << fySA(xt,yt) << " "
+        << fxsum(xt,yt) << " "
+        << fysum(xt,yt)
+        << endl;
+  };
+  
+  // List connectivity
+  for (int k=0; k<nbt; k++){
+  file << int(th[k][0])+1 << " " << int(th[k][1])+1 << " " << int(th[k][2])+1 << endl;
+  };
+};

@@ -1,0 +1,78 @@
+int Re = 19000;
+int nummesh = 2;
+int inlet = 1;
+int outlet = 3;
+
+mesh th = readmesh("../../mesh/mesh"+nummesh+".msh");
+
+fespace fu(th,P1);
+
+int ii,j,NN;
+ifstream fileX("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-X.dat"); fileX >> NN;
+ifstream fileY("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-Y.dat"); fileY >> NN;
+ifstream fileU("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-U.dat"); fileU >> NN;
+ifstream fileV("./tecplot_interp_ref_sol_mesh"+nummesh+"_Re"+Re+"-V.dat"); fileV >> NN;
+
+cout << "number of points : " << NN << endl;
+real[int] X(NN),Y(NN),U(NN),V(NN);
+
+for(ii=0;ii<NN;ii++){
+  fileX >> X(ii);
+  fileY >> Y(ii);
+  fileU >> U(ii);
+  fileV >> V(ii);
+}
+
+cout << "Max of X : " << X.max << endl;
+cout << "Max of Y : " << Y.max << endl;
+cout << "Max of U : " << U.max << endl;
+cout << "Max of V : " << V.max << endl;
+
+real dist,distmin;
+int k;
+fu Uff,Vff;
+if( abs(th.nv - NN)>0 ){
+  cout << "Incompatibility" << endl;
+}
+else{
+  cout << "Compatibility" << endl;
+}
+for( ii=0 ; ii<th.nv ; ii++ ){
+  distmin = 1000000.;
+  cout << "ii : " << ii << endl;
+  for( j=0 ; j<NN ; j++ ){
+    dist = ( th(ii).x - X(j) )^2 + ( th(ii).y - Y(j) )^2;
+    if( dist < distmin ){
+      distmin = dist;
+      k = j;
+    }
+  }
+  Uff[][ii]    = U(k);
+  Vff[][ii]    = V(k);
+}
+
+plot(Uff);
+plot(Vff);
+
+{
+  ofstream fileUff("u_mesh_"+nummesh+".txt");
+  fileUff.precision(16);
+  ofstream fileVff("v_mesh_"+nummesh+".txt");
+  fileVff.precision(16);
+  
+  fileUff   << Uff[];
+  fileVff   << Vff[];
+}
+
+func Pku = P1b;
+func Pkp = P1;
+fespace fuup(th,[Pku,Pku,Pkp], periodic=[[inlet,y],[outlet,y]]);
+
+fuup [ur,vr,pr] = [Uff,Vff,0.];
+plot(ur);
+plot(vr);
+{
+  ofstream file("./UexVexPex-mesh-"+nummesh+".txt");
+  file.precision(16);
+  file << ur[];
+}
