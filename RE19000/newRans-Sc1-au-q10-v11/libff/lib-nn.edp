@@ -182,7 +182,7 @@ func real[int] fxfyNN(real[int] &flow,
   
   // Compute feature Q1: Q criterion
   Uh num,den,aux,Smag,Omag,Q1;
-  Smag = sqrt( dx(ub)^2 + dy(vb)^2 + (dy(ub) + dx(vb))^2 ) ;
+  Smag = sqrt( 2*(dx(ub)^2) + 2*(dy(vb)^2) + (dy(ub) + dx(vb))^2 ) ;
   Omag = sqrt( (dy(ub) - dx(vb))^2 ) ;
   num = 0.5*(Omag^2-Smag^2);
   den = num+Smag^2;
@@ -203,7 +203,7 @@ func real[int] fxfyNN(real[int] &flow,
   
   // Compute feature Q5: Nonorthogonality between velocity and its gradient
   Uh Q4;
-  num =  sqrt( (ub*ub*dx(ub))^2 + (ub*vb*dy(ub))^2 + (vb*ub*dx(vb))^2 + (vb*vb*dy(vb))^2 );
+  num =  ub*ub*dx(ub) + ub*vb*dy(ub) + vb*ub*dx(vb) + vb*vb*dy(vb) ;
       //ul ul ui dj(ui) uk dj(uk)
   aux = ub*ub*ub*dx(ub)*ub*dx(ub) + // l=1 i=1 j=1 k=1
         ub*ub*ub*dx(ub)*vb*dx(vb) + // l=1 i=1 j=1 k=2

@@ -11,7 +11,7 @@ real nutinf  = 3.;
 int NSmaxiter  = 20;    // maximum number of iteration for NS solver
 int NSiter;             // number of Newton iteration for NS solver
 real NStoll    = 1.e-8; // tollerance for NS solver
-real NNtoll    = 1.e-4; // tollerance for NN solution convergence
+real NNtoll    = 1.e-3; // tollerance for NN solution convergence
 real errNN     = 1.e+9; // error for NN convergence
 bool waitplt   = false; // flag to wait after plot
 int ite        = 0;     // optim. iteration
@@ -126,7 +126,7 @@ while(errNN>NNtoll){
 	cout << "Error in force: " << errNN << " (tolerance " << NNtoll << ")" << endl;
 
 	// compute error, in variation of (u,v)
-	errNN = int2d(th)( (u-u0)^2 + (v-v0)^2 );// + abs(Ub-1.0);
+	errNN = int2d(th)( (u-u0)^2 + (v-v0)^2 ) + abs(Ub-1.0);
 	cout << "Error in velocity: " << errNN << " (tolerance " << NNtoll << ")" << endl;
 	
 	fx0[] = fx[];
